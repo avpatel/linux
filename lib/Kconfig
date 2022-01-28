@@ -8,6 +8,13 @@ config BINARY_PRINTF
 
 menu "Library routines"
 
+config MEMPERF_TEST
+	tristate "Mem* performance tests"
+	depends on CONTIG_ALLOC
+	default n
+	help
+	  Check performance of memcpy, memset, and memmove functions.
+
 config RAID6_PQ
 	tristate
 
