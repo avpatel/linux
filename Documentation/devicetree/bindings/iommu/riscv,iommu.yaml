@@ -1,0 +1,146 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/iommu/riscv,iommu.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: RISC-V IOMMU Implementation
+
+maintainers:
+  - Tomasz Jeznach <tjeznach@rivosinc.com>
+
+description:
+  The RISC-V IOMMU specificaiton defines an IOMMU for RISC-V platforms
+  which can be a regular platform device or a PCI device connected to
+  the host root port.
+
+  The RISC-V IOMMU provides two stage translation, device directory table,
+  command queue and fault reporting as wired interrupt or MSIx event for
+  both PCI and platform devices.
+
+  Visit https://github.com/riscv-non-isa/riscv-iommu for more details.
+
+properties:
+  compatible:
+    oneOf:
+      - description: RISC-V IOMMU as a platform device
+        items:
+          - enum:
+              - vendor,chip-iommu
+          - const: riscv,iommu
+
+      - description: RISC-V IOMMU as a PCI device connected to root port
+        items:
+          - enum:
+              - vendor,chip-pci-iommu
+          - const: riscv,pci-iommu
+
+  reg:
+    maxItems: 1
+    description:
+      For RISC-V IOMMU as a platform device, this represents the MMIO base
+      address of registers.
+
+      For RISC-V IOMMU as a PCI device, this represents the PCI-PCI bridge
+      details as described in Documentation/devicetree/bindings/pci/pci.txt
+
+  '#iommu-cells':
+    const: 2
+    description: |
+      Each IOMMU specifier represents the base device ID and number of
+      device IDs.
+
+  interrupts:
+    minItems: 1
+    maxItems: 16
+    description:
+      The presence of this property implies that given RISC-V IOMMU uses
+      wired interrupts to notify the RISC-V HARTS (or CPUs).
+
+  msi-parent:
+    description:
+      The presence of this property implies that given RISC-V IOMMU uses
+      MSIx to notify the RISC-V HARTs (or CPUs). This property should be
+      considered only when the interrupts property is absent.
+
+  dma-coherent:
+    description:
+      Present if page table walks and DMA accessed made by the RISC-V IOMMU
+      are cache coherent with the CPU.
+
+  power-domains:
+    maxItems: 1
+
+required:
+  - compatible
+  - reg
+  - '#iommu-cells'
+
+additionalProperties: false
+
+examples:
+  - |
+    /* Example 1 (IOMMU platform device with wired interrupts) */
+    immu1: iommu@1bccd000 {
+        compatible = "vendor,chip-iommu", "riscv,iommu";
+        reg = <0x1bccd000 0x1000>;
+        interrupt-parent = <&aplic_smode>;
+        interrupts = <32 4>, <33 4>, <34 4>, <35 4>;
+        #iommu-cells = <2>;
+    };
+
+    /* Device with two IOMMU device IDs, 0 and 7 */
+    master1 {
+        iommus = <&immu1 0 1>, <&immu1 7 1>;
+    };
+
+  - |
+    /* Example 2 (IOMMU platform device with MSIs) */
+    immu2: iommu@1bcdd000 {
+        compatible = "vendor,chip-iommu", "riscv,iommu";
+        reg = <0x1bccd000 0x1000>;
+        msi-parent = <&imsics_smode>;
+        #iommu-cells = <2>;
+    };
+
+    bus {
+        #address-cells = <2>;
+        #size-cells = <2>;
+
+        /* Device with IOMMU device IDs ranging from 32 to 64 */
+        master1 {
+                iommus = <&immu2 32 32>;
+        };
+
+        pcie@40000000 {
+            compatible = "pci-host-cam-generic";
+            device_type = "pci";
+            #address-cells = <3>;
+            #size-cells = <2>;
+            bus-range = <0x0 0x1>;
+
+            /* CPU_PHYSICAL(2)  SIZE(2) */
+            reg = <0x0 0x40000000 0x0 0x1000000>;
+
+            /* BUS_ADDRESS(3)  CPU_PHYSICAL(2)  SIZE(2) */
+            ranges = <0x01000000 0x0 0x01000000  0x0 0x01000000  0x0 0x00010000>,
+                     <0x02000000 0x0 0x41000000  0x0 0x41000000  0x0 0x3f000000>;
+
+            #interrupt-cells = <0x1>;
+
+            /* PCI_DEVICE(3)  INT#(1)  CONTROLLER(PHANDLE)  CONTROLLER_DATA(2) */
+            interrupt-map = <   0x0 0x0 0x0  0x1  &aplic_smode  0x4 0x1>,
+                            < 0x800 0x0 0x0  0x1  &aplic_smode  0x5 0x1>,
+                            <0x1000 0x0 0x0  0x1  &aplic_smode  0x6 0x1>,
+                            <0x1800 0x0 0x0  0x1  &aplic_smode  0x7 0x1>;
+
+            /* PCI_DEVICE(3)  INT#(1) */
+            interrupt-map-mask = <0xf800 0x0 0x0  0x7>;
+
+            msi-parent = <&imsics_smode>;
+
+            /* Devices with bus number 0-127 are mastered via immu2 */
+            iommu-map = <0x0000 &immu2 0x0000 0x8000>;
+        };
+    };
+...
