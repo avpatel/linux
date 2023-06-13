@@ -36,6 +36,8 @@ unsigned long __stack_chk_guard __read_mostly;
 EXPORT_SYMBOL(__stack_chk_guard);
 #endif
 
+DEFINE_PER_CPU(struct task_struct *, __entry_task);
+
 extern asmlinkage void ret_from_fork(void);
 
 void noinstr arch_cpu_idle(void)

@@ -3,6 +3,8 @@
 #define _ASM_RISCV_PROTOTYPES_H
 
 #include <linux/ftrace.h>
+#include <linux/riscv_sse.h>
+#include <asm/sse.h>
 #include <asm-generic/asm-prototypes.h>
 
 long long __lshrti3(long long a, int b);
@@ -55,5 +57,7 @@ DECLARE_DO_ERROR_INFO(do_trap_break);
 asmlinkage void handle_bad_stack(struct pt_regs *regs);
 asmlinkage void do_page_fault(struct pt_regs *regs);
 asmlinkage void do_irq(struct pt_regs *regs);
+asmlinkage void do_sse(struct sse_registered_event *reg_evt,
+				struct pt_regs *reg);
 
 #endif /* _ASM_RISCV_PROTOTYPES_H */

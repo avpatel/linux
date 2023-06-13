@@ -7,6 +7,7 @@
 #define _ASM_RISCV_SWITCH_TO_H
 
 #include <linux/jump_label.h>
+#include <linux/percpu-defs.h>
 #include <linux/sched/task_stack.h>
 #include <linux/mm_types.h>
 #include <asm/vector.h>
@@ -88,6 +89,13 @@ static inline void __switch_to_envcfg(struct task_struct *next)
 			:: "r" (next->thread.envcfg) : "memory");
 }
 
+DECLARE_PER_CPU(struct task_struct *, __entry_task);
+
+static inline void __switch_entry_task(struct task_struct *next)
+{
+	__this_cpu_write(__entry_task, next);
+}
+
 extern struct task_struct *__switch_to(struct task_struct *,
 				       struct task_struct *);
 
@@ -122,6 +130,7 @@ do {							\
 	if (switch_to_should_flush_icache(__next))	\
 		local_flush_icache_all();		\
 	__switch_to_envcfg(__next);			\
+	 __switch_entry_task(__next);			\
 	((last) = __switch_to(__prev, __next));		\
 } while (0)
 

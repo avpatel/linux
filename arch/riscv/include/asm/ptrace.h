@@ -51,6 +51,8 @@ struct pt_regs {
 	unsigned long cause;
 	/* a0 value before the syscall */
 	unsigned long orig_a0;
+	/* scratch register before exception */
+	unsigned long scratch;
 };
 
 #define PTRACE_SYSEMU			0x1f

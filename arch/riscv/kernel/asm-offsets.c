@@ -4,17 +4,22 @@
  * Copyright (C) 2017 SiFive
  */
 
+#include <linux/bitfield.h>
 #include <linux/kbuild.h>
 #include <linux/mm.h>
 #include <linux/sched.h>
 #include <linux/ftrace.h>
 #include <linux/suspend.h>
+#include <linux/riscv_sse.h>
 #include <asm/kvm_host.h>
 #include <asm/thread_info.h>
 #include <asm/ptrace.h>
 #include <asm/cpu_ops_sbi.h>
 #include <asm/stacktrace.h>
+#include <asm/sbi.h>
+#include <asm/sse.h>
 #include <asm/suspend.h>
+#include <asm/stacktrace.h>
 
 void asm_offsets(void);
 
@@ -125,6 +130,7 @@ void asm_offsets(void)
 	OFFSET(PT_STATUS, pt_regs, status);
 	OFFSET(PT_BADADDR, pt_regs, badaddr);
 	OFFSET(PT_CAUSE, pt_regs, cause);
+	OFFSET(PT_SCRATCH, pt_regs, scratch);
 
 	OFFSET(SUSPEND_CONTEXT_REGS, suspend_context, regs);
 
@@ -510,5 +516,14 @@ void asm_offsets(void)
 	DEFINE(FREGS_A5,	    offsetof(struct __arch_ftrace_regs, a5));
 	DEFINE(FREGS_A6,	    offsetof(struct __arch_ftrace_regs, a6));
 	DEFINE(FREGS_A7,	    offsetof(struct __arch_ftrace_regs, a7));
+#endif
+#ifdef CONFIG_RISCV_SSE
+	OFFSET(SSE_REG_EVT_STACK, sse_registered_event, stack);
+	OFFSET(SSE_REG_EVT_SHADOW_STACK, sse_registered_event, shadow_stack);
+	OFFSET(SSE_REG_EVT_TMP, sse_registered_event, interrupted.a6);
+
+	DEFINE(SBI_EXT_SSE, SBI_EXT_SSE);
+	DEFINE(SBI_SSE_EVENT_COMPLETE, SBI_SSE_EVENT_COMPLETE);
+	DEFINE(NR_CPUS, NR_CPUS);
 #endif
 }

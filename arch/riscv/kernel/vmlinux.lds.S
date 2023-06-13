@@ -122,6 +122,12 @@ SECTIONS
 	/* Start of data section */
 	_sdata = .;
 	RO_DATA(SECTION_ALIGN)
+
+#ifdef CONFIG_RISCV_SSE
+	__task_loc : {
+		BOUNDED_SECTION_BY(__task_loc, ___task_loc)
+	}
+#endif
 	.srodata : {
 		*(.srodata*)
 	}
