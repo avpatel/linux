@@ -50,6 +50,7 @@
 #define ACPI_SIG_RAS2           "RAS2"	/* RAS2 Feature table */
 #define ACPI_SIG_RGRT           "RGRT"	/* Regulatory Graphics Resource Table */
 #define ACPI_SIG_RHCT           "RHCT"	/* RISC-V Hart Capabilities Table */
+#define ACPI_SIG_RIMT           "RIMT"	/* RISC-V IO Mapping Table */
 #define ACPI_SIG_SBST           "SBST"	/* Smart Battery Specification Table */
 #define ACPI_SIG_SDEI           "SDEI"	/* Software Delegated Exception Interface Table */
 #define ACPI_SIG_SDEV           "SDEV"	/* Secure Devices table */
@@ -3000,6 +3001,91 @@ enum acpi_rhct_mmu_type {
 struct acpi_rhct_hart_info {
 	u16 num_offsets;
 	u32 uid;		/* ACPI processor UID */
+};
+
+/*******************************************************************************
+ *
+ * RIMT - RISC-V IO Remapping Table
+ *
+ ******************************************************************************/
+
+struct acpi_table_rimt {
+	struct acpi_table_header header;
+	u32 node_count;
+	u32 node_offset;
+	u32 reserved;
+};
+
+/*
+ * RIMT subtables
+ */
+struct acpi_rimt_node {
+	u8   type;
+	u8   revision;
+	u16  length;
+	u16  reserved;
+	u16  identifier;
+	char node_data[];
+};
+
+/* Values for subtable Type above */
+
+enum acpi_rimt_node_type {
+	ACPI_RIMT_NODE_IOMMU = 0x00,
+	ACPI_RIMT_NODE_PCI_ROOT_COMPLEX = 0x01,
+	ACPI_RIMT_NODE_PLAT_DEVICE = 0x02,
+};
+
+struct acpi_rimt_iommu {
+	u8  hwid[8];
+	u64 base_address;	/* SMMU base address */
+	u32 flags;
+	u32 proximity_domain;
+	u16 pci_segment_number;
+	u16 pci_bdf;
+	u16 interrupti_wire_count;
+	u16 interrupti_wire_offset;
+	u64 interrupts[];	/* Interrupt array */
+};
+
+#define ACPI_RIMT_IOMMU_FLAGS_PCI	(1)		/* PCI IOMMU */
+#define ACPI_RIMT_IOMMU_FLAGS_PXM_VALID	(1 << 1)	/* PXM VALID */
+
+/* Global interrupt format */
+struct acpi_rimt_iommu_wire_gsi {
+	u32 irq_num;
+	u32 flags;
+};
+
+#define ACPI_RIMT_GSI_LEVEL_TRIGGERRED	(1)		/* LEVEL triggerred */
+#define ACPI_RIMT_GSI_ACTIVE_HIGH	(1 << 1)	/* Active HIGH */
+
+struct acpi_rimt_id_mapping {
+	u32 input_base;		/* Lowest value in input range */
+	u32 id_count;		/* Number of IDs */
+	u32 output_base;	/* Lowest value in output range */
+	u32 output_reference;	/* A reference to the output node */
+	u32 flags;
+};
+
+struct acpi_rimt_root_complex {
+	u32 flags;
+	u16 reserved;
+	u16 pci_segment_number;
+	u16 id_mapping_offset;
+	u16 num_id_mapping;
+};
+
+/* Masks for ats_attribute field above */
+
+#define ACPI_RIMT_PCI_ATS_SUPPORTED         (1)		/* The root complex ATS support */
+#define ACPI_RIMT_PCI_PRI_SUPPORTED         (1 << 1)	/* The root complex PRI support */
+#define ACPI_RIMT_PCI_RCIEP		    (1 << 2)	/* RCiEP */
+
+struct acpi_rimt_platform_device {
+	u16 id_mapping_offset;
+	u16 num_id_mapping;
+	char device_name[];	/* Path of namespace object */
 };
 
 /*******************************************************************************
