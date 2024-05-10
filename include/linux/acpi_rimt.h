@@ -7,5 +7,5 @@
 #ifndef _ACPI_RIMT_H
 #define _ACPI_RIMT_H
 int rimt_iommu_configure_id(struct device *dev, const u32 *id_in, const struct iommu_ops *ops);
-int rimt_iommu_register(struct device *dev, const struct iommu_ops *ops);
+int rimt_iommu_register(struct device *dev);
 #endif /* _ACPI_RIMT_H */
