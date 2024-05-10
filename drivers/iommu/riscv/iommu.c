@@ -12,6 +12,8 @@
 
 #define pr_fmt(fmt) "riscv-iommu: " fmt
 
+#include <linux/acpi.h>
+#include <linux/acpi_rimt.h>
 #include <linux/compiler.h>
 #include <linux/crash_dump.h>
 #include <linux/init.h>
@@ -1679,6 +1681,11 @@ int riscv_iommu_init(struct riscv_iommu_device *iommu)
 		dev_err_probe(iommu->dev, rc, "cannot register sysfs interface\n");
 		goto err_iodir_off;
 	}
+
+#ifdef CONFIG_ACPI
+	if (!acpi_disabled)
+		rimt_iommu_register(iommu->dev);
+#endif
 
 	rc = iommu_device_register(&iommu->iommu, &riscv_iommu_ops, iommu->dev);
 	if (rc) {
