@@ -1690,6 +1690,7 @@ int riscv_iommu_init(struct riscv_iommu_device *iommu)
 		goto err_remove_sysfs;
 	}
 
+	dev_info(iommu->dev, "Probed the IOMMU successfully\n");
 	return 0;
 
 err_remove_sysfs:
