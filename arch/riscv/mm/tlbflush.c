@@ -6,6 +6,54 @@
 #include <linux/hugetlb.h>
 #include <asm/sbi.h>
 #include <asm/mmu_context.h>
+#include <asm/cpufeature.h>
+
+#define has_svinval()	riscv_has_extension_unlikely(RISCV_ISA_EXT_SVINVAL)
+
+static inline void local_sfence_inval_ir(void)
+{
+	/*
+	 * SFENCE.INVAL.IR
+	 * 0001100 00001 00000 000 00000 1110011
+	 */
+	__asm__ __volatile__ (".word 0x18100073" ::: "memory");
+}
+
+static inline void local_sfence_w_inval(void)
+{
+	/*
+	 * SFENCE.W.INVAL
+	 * 0001100 00000 00000 000 00000 1110011
+	 */
+	__asm__ __volatile__ (".word 0x18000073" ::: "memory");
+}
+
+static inline void local_sinval_vma_asid(unsigned long vma, unsigned long asid)
+{
+	if (asid != FLUSH_TLB_NO_ASID) {
+		/*
+		 * rs1 = a0 (VMA)
+		 * rs2 = a1 (asid)
+		 * SINVAL.VMA a0, a1
+		 * 0001011 01011 01010 000 00000 1110011
+		 */
+		__asm__ __volatile__ ("add a0, %0, zero\n"
+					"add a1, %1, zero\n"
+					".word 0x16B50073\n"
+					:: "r" (vma), "r" (asid)
+					: "a0", "a1", "memory");
+	} else {
+		/*
+		 * rs1 = a0 (VMA)
+		 * rs2 = 0
+		 * SINVAL.VMA a0
+		 * 0001011 00000 01010 000 00000 1110011
+		 */
+		__asm__ __volatile__ ("add a0, %0, zero\n"
+					".word 0x16050073\n"
+					:: "r" (vma) : "a0", "memory");
+	}
+}
 
 /*
  * Flush entire TLB if number of entries to be flushed is greater
@@ -23,6 +71,16 @@ static void local_flush_tlb_range_threshold_asid(unsigned long start,
 
 	if (nr_ptes_in_range > tlb_flush_all_threshold) {
 		local_flush_tlb_all_asid(asid);
+		return;
+	}
+
+	if (has_svinval()) {
+		local_sfence_w_inval();
+		for (i = 0; i < nr_ptes_in_range; ++i) {
+			local_sinval_vma_asid(start, asid);
+			start += stride;
+		}
+		local_sfence_inval_ir();
 		return;
 	}
 
