@@ -1619,6 +1619,11 @@ void riscv_iommu_remove(struct riscv_iommu_device *iommu)
 	riscv_iommu_queue_disable(&iommu->fltq);
 }
 
+void riscv_iommu_shutdown(struct riscv_iommu_device *iommu)
+{
+	riscv_iommu_iodir_set_mode(iommu, RISCV_IOMMU_DDTP_IOMMU_MODE_OFF);
+}
+
 int riscv_iommu_init(struct riscv_iommu_device *iommu)
 {
 	int rc;

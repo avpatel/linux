@@ -126,6 +126,7 @@ struct riscv_iommu_bond {
 
 int riscv_iommu_init(struct riscv_iommu_device *iommu);
 void riscv_iommu_remove(struct riscv_iommu_device *iommu);
+void riscv_iommu_shutdown(struct riscv_iommu_device *iommu);
 
 struct riscv_iommu_dc *riscv_iommu_get_dc(struct riscv_iommu_device *iommu,
 					  unsigned int devid);
