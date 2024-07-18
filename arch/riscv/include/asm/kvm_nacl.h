@@ -12,6 +12,8 @@
 #include <asm/csr.h>
 #include <asm/sbi.h>
 
+struct kvm_vcpu_arch;
+
 DECLARE_STATIC_KEY_FALSE(kvm_riscv_nacl_available);
 #define kvm_riscv_nacl_available() \
 	static_branch_unlikely(&kvm_riscv_nacl_available)
@@ -43,6 +45,10 @@ void __kvm_riscv_nacl_hfence(void *shmem,
 			     unsigned long page_num,
 			     unsigned long page_count);
 
+void __kvm_riscv_nacl_switch_to(struct kvm_vcpu_arch *vcpu_arch,
+				unsigned long sbi_ext_id,
+				unsigned long sbi_func_id);
+
 int kvm_riscv_nacl_enable(void);
 
 void kvm_riscv_nacl_disable(void);
@@ -63,6 +69,32 @@ int kvm_riscv_nacl_init(void);
 	this_cpu_ptr(&kvm_riscv_nacl)->shmem
 #define nacl_shmem_fast()						\
 	(kvm_riscv_nacl_available() ? nacl_shmem() : NULL)
+
+#define nacl_scratch_read_long(__shmem, __offset)			\
+({									\
+	unsigned long *__p = (__shmem) +				\
+			     SBI_NACL_SHMEM_SCRATCH_OFFSET +		\
+			     (__offset);				\
+	lelong_to_cpu(*__p);						\
+})
+
+#define nacl_scratch_write_long(__shmem, __offset, __val)		\
+do {									\
+	unsigned long *__p = (__shmem) +				\
+			     SBI_NACL_SHMEM_SCRATCH_OFFSET +		\
+			     (__offset);				\
+	*__p = cpu_to_lelong(__val);					\
+} while (0)
+
+#define nacl_scratch_write_longs(__shmem, __offset, __array, __count)	\
+do {									\
+	unsigned int __i;						\
+	unsigned long *__p = (__shmem) +				\
+			     SBI_NACL_SHMEM_SCRATCH_OFFSET +		\
+			     (__offset);				\
+	for (__i = 0; __i < (__count); __i++)				\
+		__p[__i] = cpu_to_lelong((__array)[__i]);		\
+} while (0)
 
 #define nacl_sync_hfence(__e)						\
 	sbi_ecall(SBI_EXT_NACL, SBI_EXT_NACL_SYNC_HFENCE,		\
