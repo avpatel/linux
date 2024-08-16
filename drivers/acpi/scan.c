@@ -1617,6 +1617,8 @@ int acpi_iommu_fwspec_init(struct device *dev, u32 id,
 	return iommu_fwspec_add_ids(dev, &id, 1);
 }
 
+int __weak arch_iommu_configure_id(struct device *dev, const u32 *id_in) { return -EINVAL; }
+
 static int acpi_iommu_configure_id(struct device *dev, const u32 *id_in)
 {
 	int err;
@@ -1629,7 +1631,7 @@ static int acpi_iommu_configure_id(struct device *dev, const u32 *id_in)
 		return 0;
 	}
 
-	err = iort_iommu_configure_id(dev, id_in);
+	err = arch_iommu_configure_id(dev, id_in);
 	if (err && err != -EPROBE_DEFER)
 		err = viot_iommu_configure(dev);
 	mutex_unlock(&iommu_probe_device_lock);

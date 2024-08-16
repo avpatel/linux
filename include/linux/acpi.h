@@ -1582,4 +1582,6 @@ static inline bool acpi_node_backed_by_real_pxm(int nid)
 }
 #endif
 
+int arch_iommu_configure_id(struct device *dev, const u32 *id_in);
+
 #endif	/*_LINUX_ACPI_H*/
