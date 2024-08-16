@@ -1371,6 +1371,11 @@ int iort_iommu_configure_id(struct device *dev, const u32 *input_id)
 { return -ENODEV; }
 #endif
 
+int arch_iommu_configure_id(struct device *dev, const u32 *id_in)
+{
+	return iort_iommu_configure_id(dev, id_in);
+}
+
 static int nc_dma_get_range(struct device *dev, u64 *limit)
 {
 	struct acpi_iort_node *node;
