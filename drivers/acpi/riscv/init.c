@@ -10,4 +10,5 @@
 void __init acpi_arch_init(void)
 {
 	riscv_acpi_init_gsi_mapping();
+	riscv_acpi_rimt_init();
 }
