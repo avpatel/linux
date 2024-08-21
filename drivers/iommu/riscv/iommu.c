@@ -1560,6 +1560,7 @@ static const struct iommu_ops riscv_iommu_ops = {
 
 static int riscv_iommu_init_check(struct riscv_iommu_device *iommu)
 {
+	unsigned int icvec;
 	u64 ddtp;
 
 	/*
@@ -1598,15 +1599,23 @@ static int riscv_iommu_init_check(struct riscv_iommu_device *iommu)
 	if (!iommu->irqs_count)
 		return -EINVAL;
 
-	iommu->icvec = FIELD_PREP(RISCV_IOMMU_ICVEC_FIV, 1 % iommu->irqs_count) |
-		       FIELD_PREP(RISCV_IOMMU_ICVEC_PIV, 2 % iommu->irqs_count) |
-		       FIELD_PREP(RISCV_IOMMU_ICVEC_PMIV, 3 % iommu->irqs_count);
-	riscv_iommu_writeq(iommu, RISCV_IOMMU_REG_ICVEC, iommu->icvec);
+	riscv_iommu_writeq(iommu, RISCV_IOMMU_REG_ICVEC, 0xffff);
+	icvec = riscv_iommu_readq(iommu, RISCV_IOMMU_REG_ICVEC);
+
+	icvec = FIELD_PREP(RISCV_IOMMU_ICVEC_FIV,
+			   1 % min(FIELD_GET(RISCV_IOMMU_ICVEC_FIV, icvec) + 1,
+				   iommu->irqs_count)) |
+		FIELD_PREP(RISCV_IOMMU_ICVEC_PIV,
+			   2 % min(FIELD_GET(RISCV_IOMMU_ICVEC_PIV, icvec) + 1,
+				   iommu->irqs_count)) |
+		FIELD_PREP(RISCV_IOMMU_ICVEC_PMIV,
+			   3 % min(FIELD_GET(RISCV_IOMMU_ICVEC_PMIV, icvec) + 1,
+				   iommu->irqs_count));
+
+	riscv_iommu_writeq(iommu, RISCV_IOMMU_REG_ICVEC, icvec);
 	iommu->icvec = riscv_iommu_readq(iommu, RISCV_IOMMU_REG_ICVEC);
-	if (max(max(FIELD_GET(RISCV_IOMMU_ICVEC_CIV, iommu->icvec),
-		    FIELD_GET(RISCV_IOMMU_ICVEC_FIV, iommu->icvec)),
-		max(FIELD_GET(RISCV_IOMMU_ICVEC_PIV, iommu->icvec),
-		    FIELD_GET(RISCV_IOMMU_ICVEC_PMIV, iommu->icvec))) >= iommu->irqs_count)
+
+	if (iommu->icvec != icvec)
 		return -EINVAL;
 
 	return 0;
