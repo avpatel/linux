@@ -11,11 +11,13 @@
 #include <linux/bitmap.h>
 #include <linux/irqchip/riscv-imsic.h>
 #include <linux/kvm_host.h>
+#include <linux/kvm_irqfd.h>
 #include <linux/math.h>
 #include <linux/spinlock.h>
 #include <linux/swab.h>
 #include <kvm/iodev.h>
 #include <asm/csr.h>
+#include <asm/irq.h>
 #include <asm/kvm_mmu.h>
 
 #define IMSIC_MAX_EIX	(IMSIC_MAX_ID / BITS_PER_TYPE(u64))
@@ -719,6 +721,14 @@ void kvm_riscv_vcpu_aia_imsic_put(struct kvm_vcpu *vcpu)
 	read_unlock_irqrestore(&imsic->vsfile_lock, flags);
 }
 
+static u64 kvm_riscv_aia_msi_addr_mask(struct kvm_aia *aia)
+{
+	u64 group_mask = BIT(aia->nr_group_bits) - 1;
+
+	return (group_mask << (aia->nr_group_shift - IMSIC_MMIO_PAGE_SHIFT)) |
+	       (BIT(aia->nr_hart_bits + aia->nr_guest_bits) - 1);
+}
+
 void kvm_riscv_vcpu_aia_imsic_release(struct kvm_vcpu *vcpu)
 {
 	unsigned long flags;
@@ -767,6 +777,127 @@ void kvm_riscv_vcpu_aia_imsic_release(struct kvm_vcpu *vcpu)
 
 	/* Free-up old IMSIC VS-file */
 	kvm_riscv_aia_free_hgei(old_vsfile_cpu, old_vsfile_hgei);
+}
+
+void kvm_arch_update_irqfd_routing(struct kvm_kernel_irqfd *irqfd,
+				   struct kvm_kernel_irq_routing_entry *old,
+				   struct kvm_kernel_irq_routing_entry *new)
+{
+	struct riscv_iommu_ir_vcpu_info vcpu_info;
+	struct kvm *kvm = irqfd->kvm;
+	struct kvm_aia *aia = &kvm->arch.aia;
+	int host_irq = irqfd->producer->irq;
+	struct irq_data *irqdata = irq_get_irq_data(host_irq);
+	gpa_t old_target = VCPU_INFO_INVALID_GPA;
+	unsigned long tmp, flags;
+	struct kvm_vcpu *vcpu;
+	struct msi_msg msg;
+	int ret;
+
+	if (old && old->type == KVM_IRQ_ROUTING_MSI)
+		old_target = ((gpa_t)old->msi.address_hi << 32) | old->msi.address_lo;
+
+	if (!new) {
+		if (WARN_ON_ONCE(!old) || old->type != KVM_IRQ_ROUTING_MSI)
+			return;
+
+		vcpu_info = (struct riscv_iommu_ir_vcpu_info){
+			.prev_gpa = old_target,
+			.gpa = VCPU_INFO_INVALID_GPA,
+		};
+
+		ret = irq_set_vcpu_affinity(host_irq, &vcpu_info);
+		WARN_ON_ONCE(ret);
+		return;
+	}
+
+	if (new->type != KVM_IRQ_ROUTING_MSI)
+		return;
+
+	msg = (struct msi_msg){
+		.address_hi = new->msi.address_hi,
+		.address_lo = new->msi.address_lo,
+		.data = new->msi.data,
+	};
+
+	kvm_for_each_vcpu(tmp, vcpu, kvm) {
+		struct imsic *imsic = vcpu->arch.aia_context.imsic_state;
+		gpa_t new_target = ((gpa_t)new->msi.address_hi << 32) | new->msi.address_lo;
+		u64 msi_addr_mask;
+
+		if (new_target != vcpu->arch.aia_context.imsic_addr)
+			continue;
+
+		msi_addr_mask = kvm_riscv_aia_msi_addr_mask(aia);
+		vcpu_info = (struct riscv_iommu_ir_vcpu_info){
+			.prev_gpa = old_target,
+			.gpa = new_target,
+			.msi_addr_mask = msi_addr_mask,
+			.msi_addr_pattern = (new_target >> IMSIC_MMIO_PAGE_SHIFT) & ~msi_addr_mask,
+			.group_index_bits = aia->nr_group_bits,
+			.group_index_shift = aia->nr_group_shift,
+		};
+
+		if (WARN_ON_ONCE(new_target & (IMSIC_MMIO_PAGE_SZ - 1)) ||
+		    WARN_ON_ONCE(((new_target >> IMSIC_MMIO_PAGE_SHIFT) & ~msi_addr_mask) !=
+				 vcpu_info.msi_addr_pattern)) {
+			return;
+		}
+
+		read_lock_irqsave(&imsic->vsfile_lock, flags);
+
+		if (WARN_ON_ONCE(imsic->vsfile_cpu < 0)) {
+			read_unlock_irqrestore(&imsic->vsfile_lock, flags);
+			return;
+		}
+
+		vcpu_info.hpa = imsic->vsfile_pa;
+
+		ret = irq_set_vcpu_affinity(host_irq, &vcpu_info);
+		if (WARN_ON_ONCE(ret)) {
+			read_unlock_irqrestore(&imsic->vsfile_lock, flags);
+			return;
+		}
+
+		irq_data_get_irq_chip(irqdata)->irq_write_msi_msg(irqdata, &msg);
+
+		read_unlock_irqrestore(&imsic->vsfile_lock, flags);
+	}
+}
+
+static int kvm_riscv_vcpu_irq_update(struct kvm_vcpu *vcpu)
+{
+	struct kvm *kvm = vcpu->kvm;
+	struct imsic *imsic = vcpu->arch.aia_context.imsic_state;
+	struct kvm_aia *aia = &kvm->arch.aia;
+	u64 msi_addr_mask = kvm_riscv_aia_msi_addr_mask(aia);
+	gpa_t gpa = vcpu->arch.aia_context.imsic_addr;
+	struct riscv_iommu_ir_vcpu_info vcpu_info = {
+		.prev_gpa = VCPU_INFO_INVALID_GPA,
+		.gpa = gpa,
+		.hpa = imsic->vsfile_pa,
+		.msi_addr_mask = msi_addr_mask,
+		.msi_addr_pattern = (gpa >> IMSIC_MMIO_PAGE_SHIFT) & ~msi_addr_mask,
+		.group_index_bits = aia->nr_group_bits,
+		.group_index_shift = aia->nr_group_shift,
+	};
+	struct kvm_kernel_irqfd *irqfd;
+	int ret = 0;
+
+	spin_lock_irq(&kvm->irqfds.lock);
+
+	list_for_each_entry(irqfd, &kvm->irqfds.items, list) {
+		if (!irqfd->producer)
+			continue;
+
+		ret = irq_set_vcpu_affinity(irqfd->producer->irq, &vcpu_info);
+		if (ret)
+			goto out;
+	}
+
+out:
+	spin_unlock_irq(&kvm->irqfds.lock);
+	return ret;
 }
 
 int kvm_riscv_vcpu_aia_imsic_update(struct kvm_vcpu *vcpu)
@@ -836,14 +967,17 @@ int kvm_riscv_vcpu_aia_imsic_update(struct kvm_vcpu *vcpu)
 	if (ret)
 		goto fail_free_vsfile_hgei;
 
-	/* TODO: Update the IOMMU mapping ??? */
-
 	/* Update new IMSIC VS-file details in IMSIC context */
 	write_lock_irqsave(&imsic->vsfile_lock, flags);
+
 	imsic->vsfile_hgei = new_vsfile_hgei;
 	imsic->vsfile_cpu = vcpu->cpu;
 	imsic->vsfile_va = new_vsfile_va;
 	imsic->vsfile_pa = new_vsfile_pa;
+
+	/* Update the IOMMU mapping */
+	kvm_riscv_vcpu_irq_update(vcpu);
+
 	write_unlock_irqrestore(&imsic->vsfile_lock, flags);
 
 	/*

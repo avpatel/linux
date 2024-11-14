@@ -60,7 +60,7 @@ void kvm_arch_destroy_vm(struct kvm *kvm)
 
 bool kvm_arch_has_irq_bypass(void)
 {
-	return false;
+	return true;
 }
 
 int kvm_arch_irq_bypass_add_producer(struct irq_bypass_consumer *cons,
