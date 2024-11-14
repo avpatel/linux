@@ -951,7 +951,8 @@ static void riscv_iommu_iotlb_inval(struct riscv_iommu_domain *domain,
 	rcu_read_unlock();
 }
 
-#define RISCV_IOMMU_FSC_BARE 0
+#define RISCV_IOMMU_FSC_BARE		0
+#define RISCV_IOMMU_IOHGATP_BARE	0
 
 /*
  * Update IODIR for the device.
@@ -1253,6 +1254,8 @@ static void riscv_iommu_free_paging_domain(struct iommu_domain *iommu_domain)
 
 	WARN_ON(!list_empty(&domain->bonds));
 
+	riscv_iommu_irq_domain_remove(domain);
+
 	if (domain->pscid > 0)
 		ida_free(&riscv_iommu_pscids, domain->pscid);
 	if (domain->gscid > 0)
@@ -1284,9 +1287,29 @@ static int riscv_iommu_attach_paging_domain(struct iommu_domain *iommu_domain,
 	struct riscv_iommu_device *iommu = dev_to_iommu(dev);
 	struct riscv_iommu_info *info = dev_iommu_priv_get(dev);
 	struct riscv_iommu_dc dc = {0};
+	int ret;
 
 	if (!riscv_iommu_pt_supported(iommu, domain->pgd_mode))
 		return -ENODEV;
+
+	if (riscv_iommu_bond_link(domain, dev))
+		return -ENOMEM;
+
+	if (iommu_domain->type == IOMMU_DOMAIN_UNMANAGED) {
+		domain->gscid = ida_alloc_range(&riscv_iommu_gscids, 1,
+						RISCV_IOMMU_MAX_GSCID, GFP_KERNEL);
+		if (domain->gscid < 0) {
+			riscv_iommu_bond_unlink(domain, dev);
+			return -ENOMEM;
+		}
+
+		ret = riscv_iommu_irq_domain_create(domain, dev);
+		if (ret) {
+			riscv_iommu_bond_unlink(domain, dev);
+			ida_free(&riscv_iommu_gscids, domain->gscid);
+			return ret;
+		}
+	}
 
 	if (domain->gscid) {
 		dc.iohgatp = FIELD_PREP(RISCV_IOMMU_DC_IOHGATP_MODE, domain->pgd_mode) |
@@ -1300,10 +1323,9 @@ static int riscv_iommu_attach_paging_domain(struct iommu_domain *iommu_domain,
 	dc.ta = FIELD_PREP(RISCV_IOMMU_PC_TA_PSCID, domain->pscid) |
 			   RISCV_IOMMU_PC_TA_V;
 
-	if (riscv_iommu_bond_link(domain, dev))
-		return -ENOMEM;
-
 	riscv_iommu_iodir_update(iommu, dev, &dc);
+
+	riscv_iommu_irq_domain_unlink(info->domain, dev);
 	riscv_iommu_bond_unlink(info->domain, dev);
 	info->domain = domain;
 
@@ -1397,9 +1419,12 @@ static int riscv_iommu_attach_blocking_domain(struct iommu_domain *iommu_domain,
 	struct riscv_iommu_dc dc = {0};
 
 	dc.fsc = RISCV_IOMMU_FSC_BARE;
+	dc.iohgatp = RISCV_IOMMU_IOHGATP_BARE;
 
 	/* Make device context invalid, translation requests will fault w/ #258 */
 	riscv_iommu_iodir_update(iommu, dev, &dc);
+
+	riscv_iommu_irq_domain_unlink(info->domain, dev);
 	riscv_iommu_bond_unlink(info->domain, dev);
 	info->domain = NULL;
 
@@ -1421,13 +1446,22 @@ static int riscv_iommu_attach_identity_domain(struct iommu_domain *iommu_domain,
 	struct riscv_iommu_dc dc = {0};
 
 	dc.fsc = RISCV_IOMMU_FSC_BARE;
+	dc.iohgatp = RISCV_IOMMU_IOHGATP_BARE;
 	dc.ta = RISCV_IOMMU_PC_TA_V;
 
 	riscv_iommu_iodir_update(iommu, dev, &dc);
+
+	riscv_iommu_irq_domain_unlink(info->domain, dev);
 	riscv_iommu_bond_unlink(info->domain, dev);
 	info->domain = NULL;
 
 	return 0;
+}
+
+static void riscv_iommu_get_resv_regions(struct device *dev,
+					 struct list_head *head)
+{
+	riscv_iommu_ir_get_resv_regions(dev, head);
 }
 
 static struct iommu_domain riscv_iommu_identity_domain = {
@@ -1524,6 +1558,7 @@ static const struct iommu_ops riscv_iommu_ops = {
 	.blocked_domain = &riscv_iommu_blocking_domain,
 	.release_domain = &riscv_iommu_blocking_domain,
 	.domain_alloc_paging = riscv_iommu_alloc_paging_domain,
+	.get_resv_regions = riscv_iommu_get_resv_regions,
 	.device_group = riscv_iommu_device_group,
 	.probe_device = riscv_iommu_probe_device,
 	.release_device	= riscv_iommu_release_device,
