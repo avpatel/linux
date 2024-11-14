@@ -27,6 +27,7 @@ struct riscv_iommu_domain {
 	int numa_node;
 	unsigned int pgd_mode;
 	unsigned long *pgd_root;
+	struct irq_domain *irqdomain;
 };
 
 struct riscv_iommu_device;
@@ -80,6 +81,12 @@ struct riscv_iommu_device {
 int riscv_iommu_init(struct riscv_iommu_device *iommu);
 void riscv_iommu_remove(struct riscv_iommu_device *iommu);
 void riscv_iommu_disable(struct riscv_iommu_device *iommu);
+
+int riscv_iommu_ir_irq_domain_create(struct riscv_iommu_domain *domain,
+				     struct device *dev);
+void riscv_iommu_ir_irq_domain_remove(struct riscv_iommu_domain *domain);
+void riscv_iommu_ir_irq_domain_unlink(struct riscv_iommu_domain *domain,
+				      struct device *dev);
 
 #define riscv_iommu_readl(iommu, addr) \
 	readl_relaxed((iommu)->reg + (addr))
