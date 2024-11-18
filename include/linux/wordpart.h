@@ -40,6 +40,14 @@
 #define make_u32_from_two_u16(hi, lo)	(((u32)(hi) << 16) | (u32)(lo))
 
 /**
+ * make_u64_from_two_u32 - return u64 number by combining
+ * two u32 numbers.
+ * @hi: upper 32 bit number
+ * @lo: lower 32 bit number
+ */
+#define make_u64_from_two_u32(hi, lo)	(((u64)(hi) << 32) | (u32)(lo))
+
+/**
  * REPEAT_BYTE - repeat the value @x multiple times as an unsigned long value
  * @x: value to repeat
  *
