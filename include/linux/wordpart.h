@@ -32,6 +32,14 @@
 #define lower_16_bits(n) ((u16)((n) & 0xffff))
 
 /**
+ * get_u64_from_u32(hi, lo) - return u64 number by combining
+ * two u32 numbers.
+ * @hi: upper 32 bit number
+ * @lo: lower 32 bit number
+ */
+#define get_u64_from_u32(hi, lo)	(((u64)(hi) << 32) | (u32)(lo))
+
+/**
  * REPEAT_BYTE - repeat the value @x multiple times as an unsigned long value
  * @x: value to repeat
  *
