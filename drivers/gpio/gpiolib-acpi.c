@@ -839,7 +839,7 @@ static int acpi_gpio_property_lookup(struct fwnode_handle *fwnode,
 	int ret;
 
 	memset(&args, 0, sizeof(args));
-	ret = __acpi_node_get_property_reference(fwnode, propname, index, 3,
+	ret = __acpi_node_get_property_reference(fwnode, propname, index, NULL, 3,
 						 &args);
 	if (ret) {
 		struct acpi_device *adev;

@@ -887,6 +887,9 @@ static struct fwnode_handle *acpi_parse_string_ref(const struct fwnode_handle *f
  * @fwnode: Firmware node to get the property from
  * @propname: Name of the property
  * @index: Index of the reference to return
+ * @nargs_prop:	The name of the property telling the number of arguments
+ *		in the referred node. NULL if @num_args is known, otherwise
+ *		@num_args is ignored.
  * @num_args: Maximum number of arguments after each reference
  * @args: Location to store the returned reference with optional arguments
  *	  (may be NULL)
@@ -919,13 +922,14 @@ static struct fwnode_handle *acpi_parse_string_ref(const struct fwnode_handle *f
  * Return: %0 on success, negative error code on failure.
  */
 int __acpi_node_get_property_reference(const struct fwnode_handle *fwnode,
-	const char *propname, size_t index, size_t num_args,
+	const char *propname, size_t index, const char *nargs_prop, size_t num_args,
 	struct fwnode_reference_args *args)
 {
 	const union acpi_object *element, *end;
 	const union acpi_object *obj;
 	const struct acpi_device_data *data;
 	struct fwnode_handle *ref_fwnode;
+	struct acpi_device *ref_adev;
 	struct acpi_device *device;
 	int ret, idx = 0;
 
@@ -1012,6 +1016,13 @@ int __acpi_node_get_property_reference(const struct fwnode_handle *fwnode,
 							   element->string.pointer);
 			if (!ref_fwnode)
 				return -EINVAL;
+			if (nargs_prop) {
+				ref_adev = to_acpi_device_node(ref_fwnode);
+				if (!acpi_dev_get_property(ref_adev, nargs_prop,
+							   ACPI_TYPE_INTEGER, &obj)) {
+					num_args = obj->integer.value;
+				}
+			}
 
 			element++;
 
@@ -1565,7 +1576,7 @@ acpi_fwnode_get_reference_args(const struct fwnode_handle *fwnode,
 			       struct fwnode_reference_args *args)
 {
 	return __acpi_node_get_property_reference(fwnode, prop, index,
-						  args_count, args);
+						  nargs_prop, args_count, args);
 }
 
 static const char *acpi_fwnode_get_name(const struct fwnode_handle *fwnode)

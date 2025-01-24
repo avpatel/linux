@@ -1790,7 +1790,7 @@ static struct pwm_device *acpi_pwm_get(const struct fwnode_handle *fwnode)
 
 	memset(&args, 0, sizeof(args));
 
-	ret = __acpi_node_get_property_reference(fwnode, "pwms", 0, 3, &args);
+	ret = __acpi_node_get_property_reference(fwnode, "pwms", 0, NULL, 3, &args);
 	if (ret < 0)
 		return ERR_PTR(ret);
 
