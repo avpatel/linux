@@ -75,6 +75,8 @@ bool msi_lib_init_dev_msi_info(struct device *dev, struct irq_domain *domain,
 		/* Remove PCI specific flags */
 		required_flags &= ~MSI_FLAG_PCI_MSI_MASK_PARENT;
 		break;
+	case DOMAIN_BUS_MSI_REMAP:
+		break;
 	default:
 		/*
 		 * This should never be reached. See
