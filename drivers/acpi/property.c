@@ -882,6 +882,17 @@ static struct fwnode_handle *acpi_parse_string_ref(const struct fwnode_handle *f
 	return &dn->fwnode;
 }
 
+static unsigned int acpi_fwnode_get_args_count(const struct acpi_device *device,
+					       const char *nargs_prop)
+{
+	const union acpi_object *obj;
+
+	if (acpi_dev_get_property(device, nargs_prop, ACPI_TYPE_INTEGER, &obj))
+		return 0;
+
+	return obj->integer.value;
+}
+
 static int acpi_fwnode_get_reference_args(const struct fwnode_handle *fwnode,
 					  const char *propname, const char *nargs_prop,
 					  unsigned int args_count, unsigned int index,
@@ -892,6 +903,7 @@ static int acpi_fwnode_get_reference_args(const struct fwnode_handle *fwnode,
 	const struct acpi_device_data *data;
 	struct fwnode_handle *ref_fwnode;
 	struct acpi_device *device;
+	unsigned int nargs_count;
 	int ret, idx = 0;
 
 	data = acpi_device_data_of_node(fwnode);
@@ -960,11 +972,12 @@ static int acpi_fwnode_get_reference_args(const struct fwnode_handle *fwnode,
 			if (!device)
 				return -EINVAL;
 
+			nargs_count = acpi_fwnode_get_args_count(device, nargs_prop);
 			element++;
-
 			ret = acpi_get_ref_args(idx == index ? args : NULL,
 						acpi_fwnode_handle(device),
-						&element, end, args_count);
+						&element, end,
+						nargs_count ? nargs_count : args_count);
 			if (ret < 0)
 				return ret;
 
@@ -978,11 +991,12 @@ static int acpi_fwnode_get_reference_args(const struct fwnode_handle *fwnode,
 			if (!ref_fwnode)
 				return -EINVAL;
 
+			device = to_acpi_device_node(ref_fwnode);
+			nargs_count = acpi_fwnode_get_args_count(device, nargs_prop);
 			element++;
-
 			ret = acpi_get_ref_args(idx == index ? args : NULL,
 						ref_fwnode, &element, end,
-						args_count);
+						nargs_count ? nargs_count : args_count);
 			if (ret < 0)
 				return ret;
 
