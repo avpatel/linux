@@ -960,6 +960,13 @@ static int acpi_fwnode_get_reference_args(const struct fwnode_handle *fwnode,
 			if (!device)
 				return -EINVAL;
 
+			if (nargs_prop) {
+				if (!acpi_dev_get_property(device, nargs_prop,
+							   ACPI_TYPE_INTEGER, &obj)) {
+					args_count = obj->integer.value;
+				}
+			}
+
 			element++;
 
 			ret = acpi_get_ref_args(idx == index ? args : NULL,
@@ -977,6 +984,14 @@ static int acpi_fwnode_get_reference_args(const struct fwnode_handle *fwnode,
 							   element->string.pointer);
 			if (!ref_fwnode)
 				return -EINVAL;
+
+			if (nargs_prop) {
+				device = to_acpi_device_node(ref_fwnode);
+				if (!acpi_dev_get_property(device, nargs_prop,
+							   ACPI_TYPE_INTEGER, &obj)) {
+					args_count = obj->integer.value;
+				}
+			}
 
 			element++;
 
