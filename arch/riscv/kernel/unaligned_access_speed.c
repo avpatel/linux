@@ -12,6 +12,7 @@
 #include <linux/types.h>
 #include <asm/cpufeature.h>
 #include <asm/hwprobe.h>
+#include <asm/sbi.h>
 #include <asm/vector.h>
 
 #include "copy-unaligned.h"
@@ -230,9 +231,87 @@ static int __init lock_and_set_unaligned_access_static_branch(void)
 
 arch_initcall_sync(lock_and_set_unaligned_access_static_branch);
 
+/*
+ * An unaligned_access_table_entry maps harts (or collections of harts) to
+ * unaligned access types. @level is used to determine whether @marchid and/or
+ * @mimpid should to be considered. All (level, mvendorid, marchid, mimpid)
+ * tuples formed from each table entry must be unique.
+ */
+enum id_level {
+	LEVEL_VENDOR,
+	LEVEL_ARCH,
+	LEVEL_IMP,
+};
+struct unaligned_access_table_entry {
+	enum id_level level;
+	u32 mvendorid;
+	ulong marchid;
+	ulong mimpid;
+	long type;
+};
+
+static struct unaligned_access_table_entry unaligned_access_table_entries[] = {
+};
+
+/*
+ * Search unaligned_access_table_entries[] for the most specific match,
+ * i.e. if there are two entries, one with mvendorid = V and level = VENDOR
+ * and another with mvendorid = V, level = ARCH, and marchid = A, then
+ * a hart with {V,A,?} will match the latter while a hart with {V,!A,?}
+ * will match the former.
+ */
+static bool __check_unaligned_access_table(int cpu, long *ptr, int nr_entries,
+					   struct unaligned_access_table_entry table[])
+{
+	struct unaligned_access_table_entry *entry, *match = NULL;
+	u32 mvendorid = riscv_cached_mvendorid(cpu);
+	ulong marchid = riscv_cached_marchid(cpu);
+	ulong mimpid = riscv_cached_mimpid(cpu);
+	int i;
+
+	for (i = 0; i < nr_entries; ++i) {
+		entry = &table[i];
+
+		switch (entry->level) {
+		case LEVEL_VENDOR:
+			if (!match && entry->mvendorid == mvendorid) {
+				/* The match, unless we find an ARCH or IMP level match. */
+				match = entry;
+			}
+			break;
+		case LEVEL_ARCH:
+			if (entry->mvendorid == mvendorid && entry->marchid == marchid) {
+				/* The match, unless we find an IMP level match. */
+				match = entry;
+			}
+			break;
+		case LEVEL_IMP:
+			if (entry->mvendorid == mvendorid && entry->marchid == marchid &&
+			    entry->mimpid == mimpid) {
+				match = entry;
+				goto matched;
+			}
+			break;
+		}
+	}
+
+	if (match) {
+matched:
+		*ptr = match->type;
+		return true;
+	}
+
+	return false;
+}
+
 static bool check_unaligned_access_table(void)
 {
-	return false;
+	int cpu = smp_processor_id();
+	long *ptr = per_cpu_ptr(&misaligned_access_speed, cpu);
+
+	return __check_unaligned_access_table(cpu, ptr,
+					      ARRAY_SIZE(unaligned_access_table_entries),
+					      unaligned_access_table_entries);
 }
 
 static int riscv_online_cpu(unsigned int cpu)
@@ -380,9 +459,17 @@ static int __init vec_check_unaligned_access_speed_all_cpus(void *unused __alway
 }
 #endif
 
+static struct unaligned_access_table_entry vec_unaligned_access_table_entries[] = {
+};
+
 static bool check_vector_unaligned_access_table(void)
 {
-	return false;
+	int cpu = smp_processor_id();
+	long *ptr = per_cpu_ptr(&vector_misaligned_access, cpu);
+
+	return __check_unaligned_access_table(cpu, ptr,
+					      ARRAY_SIZE(vec_unaligned_access_table_entries),
+					      vec_unaligned_access_table_entries);
 }
 
 static int riscv_online_cpu_vec(unsigned int cpu)
