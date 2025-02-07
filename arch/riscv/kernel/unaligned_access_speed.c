@@ -14,6 +14,7 @@
 #include <asm/hwprobe.h>
 #include <asm/sbi.h>
 #include <asm/vector.h>
+#include <asm/vendorid_list.h>
 
 #include "copy-unaligned.h"
 
@@ -251,6 +252,7 @@ struct unaligned_access_table_entry {
 };
 
 static struct unaligned_access_table_entry unaligned_access_table_entries[] = {
+	{ LEVEL_VENDOR, VENTANA_VENDOR_ID, 0, 0, RISCV_HWPROBE_MISALIGNED_SCALAR_FAST },
 };
 
 /*
@@ -460,6 +462,7 @@ static int __init vec_check_unaligned_access_speed_all_cpus(void *unused __alway
 #endif
 
 static struct unaligned_access_table_entry vec_unaligned_access_table_entries[] = {
+	{ LEVEL_VENDOR, VENTANA_VENDOR_ID, 0, 0, RISCV_HWPROBE_MISALIGNED_VECTOR_FAST },
 };
 
 static bool check_vector_unaligned_access_table(void)
