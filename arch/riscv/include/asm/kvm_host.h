@@ -169,7 +169,12 @@ struct kvm_cpu_context {
 	struct __riscv_v_ext_state vector;
 };
 
+struct kvm_vcpu_smstateen_csr {
+	unsigned long sstateen0;
+};
+
 struct kvm_vcpu_csr {
+	/* General CSR context of Guest VCPU */
 	unsigned long vsstatus;
 	unsigned long vsie;
 	unsigned long vstvec;
@@ -181,16 +186,14 @@ struct kvm_vcpu_csr {
 	unsigned long vsatp;
 	unsigned long scounteren;
 	unsigned long senvcfg;
+	/* Smstateen CSR context of Guest VCPU */
+	struct kvm_vcpu_smstateen_csr smstateen;
 };
 
 struct kvm_vcpu_config {
 	u64 henvcfg;
 	u64 hstateen0;
 	unsigned long hedeleg;
-};
-
-struct kvm_vcpu_smstateen_csr {
-	unsigned long sstateen0;
 };
 
 struct kvm_vcpu_arch {
@@ -223,9 +226,6 @@ struct kvm_vcpu_arch {
 
 	/* CPU CSR context of Guest VCPU */
 	struct kvm_vcpu_csr guest_csr;
-
-	/* CPU Smstateen CSR context of Guest VCPU */
-	struct kvm_vcpu_smstateen_csr smstateen_csr;
 
 	/* CPU context upon Guest VCPU reset */
 	struct kvm_cpu_context guest_reset_context;

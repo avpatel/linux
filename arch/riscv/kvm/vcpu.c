@@ -740,7 +740,7 @@ static void kvm_riscv_update_hvip(struct kvm_vcpu *vcpu)
 
 static __always_inline void kvm_riscv_vcpu_swap_in_guest_state(struct kvm_vcpu *vcpu)
 {
-	struct kvm_vcpu_smstateen_csr *smcsr = &vcpu->arch.smstateen_csr;
+	struct kvm_vcpu_smstateen_csr *smcsr = &vcpu->arch.guest_csr.smstateen;
 	struct kvm_vcpu_csr *csr = &vcpu->arch.guest_csr;
 	struct kvm_vcpu_config *cfg = &vcpu->arch.cfg;
 
@@ -754,7 +754,7 @@ static __always_inline void kvm_riscv_vcpu_swap_in_guest_state(struct kvm_vcpu *
 
 static __always_inline void kvm_riscv_vcpu_swap_in_host_state(struct kvm_vcpu *vcpu)
 {
-	struct kvm_vcpu_smstateen_csr *smcsr = &vcpu->arch.smstateen_csr;
+	struct kvm_vcpu_smstateen_csr *smcsr = &vcpu->arch.guest_csr.smstateen;
 	struct kvm_vcpu_csr *csr = &vcpu->arch.guest_csr;
 	struct kvm_vcpu_config *cfg = &vcpu->arch.cfg;
 
