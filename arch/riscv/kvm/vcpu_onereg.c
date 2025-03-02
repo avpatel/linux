@@ -491,7 +491,7 @@ static inline int kvm_riscv_vcpu_smstateen_set_csr(struct kvm_vcpu *vcpu,
 						   unsigned long reg_num,
 						   unsigned long reg_val)
 {
-	struct kvm_vcpu_smstateen_csr *csr = &vcpu->arch.smstateen_csr;
+	struct kvm_vcpu_smstateen_csr *csr = &vcpu->arch.guest_csr.smstateen;
 
 	if (reg_num >= sizeof(struct kvm_riscv_smstateen_csr) /
 		sizeof(unsigned long))
@@ -505,7 +505,7 @@ static int kvm_riscv_vcpu_smstateen_get_csr(struct kvm_vcpu *vcpu,
 					    unsigned long reg_num,
 					    unsigned long *out_val)
 {
-	struct kvm_vcpu_smstateen_csr *csr = &vcpu->arch.smstateen_csr;
+	struct kvm_vcpu_smstateen_csr *csr = &vcpu->arch.guest_csr.smstateen;
 
 	if (reg_num >= sizeof(struct kvm_riscv_smstateen_csr) /
 		sizeof(unsigned long))
