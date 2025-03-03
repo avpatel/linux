@@ -91,6 +91,8 @@ static int __init riscv_kvm_init(void)
 	if (rc && rc != -ENODEV)
 		return rc;
 
+	kvm_riscv_nested_init();
+
 	kvm_riscv_gstage_mode_detect();
 
 	kvm_riscv_gstage_vmid_detect();
@@ -133,6 +135,9 @@ static int __init riscv_kvm_init(void)
 		kvm_info("using SBI nested acceleration with %s\n",
 			 (rc) ? slist : "no features");
 	}
+
+	if (kvm_riscv_nested_available())
+		kvm_info("nested virtualization available\n");
 
 	switch (kvm_riscv_gstage_mode()) {
 	case HGATP_MODE_SV32X4:
