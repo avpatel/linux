@@ -14,14 +14,30 @@
 static int gstage_page_fault(struct kvm_vcpu *vcpu, struct kvm_run *run,
 			     struct kvm_cpu_trap *trap)
 {
-	struct kvm_gstage_mapping host_map;
+	struct kvm_gstage_mapping guest_map, host_map;
 	struct kvm_memory_slot *memslot;
 	unsigned long hva, fault_addr;
+	struct kvm_cpu_trap out_trap;
 	bool writable;
 	gfn_t gfn;
 	int ret;
 
-	fault_addr = (trap->htval << 2) | (trap->stval & 0x3);
+	if (kvm_riscv_vcpu_nested_virt(vcpu)) {
+		memset(&out_trap, 0, sizeof(out_trap));
+		ret = kvm_riscv_vcpu_nested_gstage_xlate(vcpu, trap,
+							 &guest_map, &out_trap);
+		if (ret <= 0)
+			return ret;
+		fault_addr = __page_val_to_pfn(pte_val(guest_map.pte)) << PAGE_SHIFT;
+
+		if (out_trap.scause) {
+			kvm_riscv_vcpu_trap_redirect(vcpu, &out_trap);
+			return 1;
+		}
+	} else {
+		fault_addr = (trap->htval << 2) | (trap->stval & 0x3);
+	}
+
 	gfn = fault_addr >> PAGE_SHIFT;
 	memslot = gfn_to_memslot(vcpu->kvm, gfn);
 	hva = gfn_to_hva_memslot_prot(memslot, gfn, &writable);
@@ -46,6 +62,9 @@ static int gstage_page_fault(struct kvm_vcpu *vcpu, struct kvm_run *run,
 		(trap->scause == EXC_STORE_GUEST_PAGE_FAULT) ? true : false, &host_map);
 	if (ret < 0)
 		return ret;
+
+	if (kvm_riscv_vcpu_nested_virt(vcpu) && !pte_none(host_map.pte))
+		kvm_riscv_vcpu_nested_swtlb_request(vcpu, &guest_map, &host_map);
 
 	return 1;
 }
@@ -234,12 +253,18 @@ int kvm_riscv_vcpu_exit(struct kvm_vcpu *vcpu, struct kvm_run *run,
 			ret = gstage_page_fault(vcpu, run, trap);
 		break;
 	case EXC_SUPERVISOR_SYSCALL:
-		if (vcpu->arch.guest_context.hstatus & HSTATUS_SPV)
+		if (kvm_riscv_vcpu_nested_virt(vcpu))
+			ret = vcpu_redirect(vcpu, trap);
+		else if (vcpu->arch.guest_context.hstatus & HSTATUS_SPV)
 			ret = kvm_riscv_vcpu_sbi_ecall(vcpu, run);
 		break;
 	case EXC_BREAKPOINT:
-		run->exit_reason = KVM_EXIT_DEBUG;
-		ret = 0;
+		if (kvm_riscv_vcpu_nested_virt(vcpu)) {
+			ret = vcpu_redirect(vcpu, trap);
+		} else {
+			run->exit_reason = KVM_EXIT_DEBUG;
+			ret = 0;
+		}
 		break;
 	default:
 		break;

@@ -78,6 +78,8 @@ static void kvm_riscv_reset_vcpu(struct kvm_vcpu *vcpu)
 	memcpy(cntx, reset_cntx, sizeof(*cntx));
 	spin_unlock(&vcpu->arch.reset_cntx_lock);
 
+	kvm_riscv_vcpu_nested_reset(vcpu);
+
 	kvm_riscv_vcpu_fp_reset(vcpu);
 
 	kvm_riscv_vcpu_vector_reset(vcpu);
@@ -728,6 +730,13 @@ static void kvm_riscv_check_vcpu_requests(struct kvm_vcpu *vcpu)
 
 		if (kvm_check_request(KVM_REQ_STEAL_UPDATE, vcpu))
 			kvm_riscv_vcpu_record_steal_time(vcpu);
+
+		/*
+		 * Process nested software TLB request after handling
+		 * various HFENCE requests.
+		 */
+		if (kvm_check_request(KVM_REQ_NESTED_SWTLB, vcpu))
+			kvm_riscv_vcpu_nested_swtlb_process(vcpu);
 	}
 }
 

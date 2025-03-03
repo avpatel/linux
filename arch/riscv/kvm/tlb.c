@@ -195,6 +195,7 @@ void kvm_riscv_hfence_gvma_vmid_all_process(struct kvm_vcpu *vcpu)
 		nacl_hfence_gvma_vmid_all(nacl_shmem(), vmid);
 	else
 		kvm_riscv_local_hfence_gvma_vmid_all(vmid);
+	kvm_riscv_vcpu_nested_swtlb_flush_host(vcpu, 0, 0, 0);
 }
 
 void kvm_riscv_hfence_vvma_all_process(struct kvm_vcpu *vcpu)
@@ -272,6 +273,7 @@ void kvm_riscv_hfence_process(struct kvm_vcpu *vcpu)
 			else
 				kvm_riscv_local_hfence_gvma_vmid_gpa(d.vmid, d.addr,
 								     d.size, d.order);
+			kvm_riscv_vcpu_nested_swtlb_flush_host(vcpu, d.addr, d.size, d.order);
 			break;
 		case KVM_RISCV_HFENCE_VVMA_ASID_GVA:
 			kvm_riscv_vcpu_pmu_incr_fw(vcpu, SBI_PMU_FW_HFENCE_VVMA_ASID_RCVD);
