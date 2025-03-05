@@ -22,7 +22,7 @@ static DEFINE_SPINLOCK(vmid_lock);
 
 void __init kvm_riscv_gstage_vmid_detect(void)
 {
-	unsigned long old;
+	unsigned long old, min_vmids;
 
 	/* Figure-out number of VMID bits in HW */
 	old = csr_read(CSR_HGATP);
@@ -35,14 +35,36 @@ void __init kvm_riscv_gstage_vmid_detect(void)
 	/* We polluted local TLB so flush all guest TLB */
 	kvm_riscv_local_hfence_gvma_all();
 
-	/* We don't use VMID bits if they are not sufficient */
-	if ((1UL << vmid_bits) < num_possible_cpus())
+	/*
+	 * A single guest with nested virtualization needs two
+	 * VMIDs: one for the guest hypervisor (L1) and another
+	 * for the nested guest (L2).
+	 *
+	 * Potentially, we can have a separate guest running on
+	 * each host CPU so the number of VMIDs should not be:
+	 *
+	 * 1. less than the number of host CPUs for
+	 *    nested virtualization disabled
+	 * 2. less than twice the number of host CPUs for
+	 *    nested virtualization enabled
+	 */
+	min_vmids = num_possible_cpus();
+	if (kvm_riscv_nested_available())
+		min_vmids = min_vmids * 2;
+	if (BIT(vmid_bits) < min_vmids)
 		vmid_bits = 0;
 }
 
 unsigned long kvm_riscv_gstage_vmid_bits(void)
 {
 	return vmid_bits;
+}
+
+unsigned long kvm_riscv_gstage_nested_vmid(unsigned long vmid)
+{
+	if (kvm_riscv_nested_available())
+		return vmid | BIT(vmid_bits - 1);
+	return vmid;
 }
 
 int kvm_riscv_gstage_vmid_init(struct kvm *kvm)
@@ -112,7 +134,10 @@ void kvm_riscv_gstage_vmid_update(struct kvm_vcpu *vcpu)
 
 	vmid->vmid = vmid_next;
 	vmid_next++;
-	vmid_next &= (1 << vmid_bits) - 1;
+	if (kvm_riscv_nested_available())
+		vmid_next &= BIT(vmid_bits - 1) - 1;
+	else
+		vmid_next &= BIT(vmid_bits) - 1;
 
 	WRITE_ONCE(vmid->vmid_version, READ_ONCE(vmid_version));
 
