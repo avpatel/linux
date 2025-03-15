@@ -168,9 +168,11 @@ static int gstage_set_pte(struct kvm *kvm,
 		ptep = &next_ptep[gstage_pte_index(map->addr, current_level)];
 	}
 
-	set_pte(ptep, map->pte);
-	if (gstage_pte_leaf(ptep))
-		gstage_remote_tlb_flush(kvm, current_level, map->addr);
+	if (pte_val(*ptep) != pte_val(map->pte)) {
+		set_pte(ptep, map->pte);
+		if (gstage_pte_leaf(ptep))
+			gstage_remote_tlb_flush(kvm, current_level, map->addr);
+	}
 
 	return 0;
 }
