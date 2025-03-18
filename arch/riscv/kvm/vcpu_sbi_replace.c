@@ -122,13 +122,40 @@ static int kvm_sbi_ext_rfence_handler(struct kvm_vcpu *vcpu, struct kvm_run *run
 		kvm_riscv_vcpu_pmu_incr_fw(vcpu, SBI_PMU_FW_HFENCE_VVMA_ASID_SENT);
 		break;
 	case SBI_EXT_RFENCE_REMOTE_HFENCE_GVMA:
+		if (cp->a2 == 0 && cp->a3 == 0)
+			kvm_riscv_nested_hfence_gvma_all(vcpu->kvm, hbase, hmask);
+		else
+			kvm_riscv_nested_hfence_gvma_gpa(vcpu->kvm, hbase, hmask,
+							 cp->a2, cp->a3, PAGE_SHIFT);
+		kvm_riscv_vcpu_pmu_incr_fw(vcpu, SBI_PMU_FW_HFENCE_GVMA_SENT);
+		break;
 	case SBI_EXT_RFENCE_REMOTE_HFENCE_GVMA_VMID:
+		if (cp->a2 == 0 && cp->a3 == 0)
+			kvm_riscv_nested_hfence_gvma_vmid_all(vcpu->kvm,
+							      hbase, hmask, cp->a4);
+		else
+			kvm_riscv_nested_hfence_gvma_vmid_gpa(vcpu->kvm, hbase, hmask,
+							      cp->a2, cp->a3,
+							      PAGE_SHIFT, cp->a4);
+		kvm_riscv_vcpu_pmu_incr_fw(vcpu, SBI_PMU_FW_HFENCE_GVMA_VMID_SENT);
+		break;
 	case SBI_EXT_RFENCE_REMOTE_HFENCE_VVMA:
+		if (cp->a2 == 0 && cp->a3 == 0)
+			kvm_riscv_nested_hfence_vvma_all(vcpu->kvm, hbase, hmask);
+		else
+			kvm_riscv_nested_hfence_vvma_gva(vcpu->kvm, hbase, hmask,
+							 cp->a2, cp->a3, PAGE_SHIFT);
+		kvm_riscv_vcpu_pmu_incr_fw(vcpu, SBI_PMU_FW_HFENCE_VVMA_SENT);
+		break;
 	case SBI_EXT_RFENCE_REMOTE_HFENCE_VVMA_ASID:
-		/*
-		 * Until nested virtualization is implemented, the
-		 * SBI HFENCE calls should be treated as NOPs
-		 */
+		if (cp->a2 == 0 && cp->a3 == 0)
+			kvm_riscv_nested_hfence_vvma_asid_all(vcpu->kvm, hbase, hmask,
+							      cp->a4);
+		else
+			kvm_riscv_nested_hfence_vvma_asid_gva(vcpu->kvm, hbase, hmask,
+							      cp->a2, cp->a3, PAGE_SHIFT,
+							      cp->a4);
+		kvm_riscv_vcpu_pmu_incr_fw(vcpu, SBI_PMU_FW_HFENCE_VVMA_ASID_SENT);
 		break;
 	default:
 		retdata->err_val = SBI_ERR_NOT_SUPPORTED;

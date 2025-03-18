@@ -58,6 +58,11 @@ int kvm_riscv_vcpu_nested_gstage_xlate(struct kvm_vcpu *vcpu,
 				       const struct kvm_cpu_trap *trap,
 				       struct kvm_gstage_mapping *out_map,
 				       struct kvm_cpu_trap *out_trap);
+void kvm_riscv_vcpu_nested_swtlb_flush_guest(struct kvm_vcpu *vcpu,
+					     gpa_t addr, gpa_t size, unsigned long order);
+void kvm_riscv_vcpu_nested_swtlb_flush_guest_vmid(struct kvm_vcpu *vcpu,
+						  gpa_t addr, gpa_t size, unsigned long order,
+						  unsigned long vmid);
 void kvm_riscv_vcpu_nested_swtlb_flush_host(struct kvm_vcpu *vcpu,
 					    gpa_t addr, gpa_t size, unsigned long order);
 void kvm_riscv_vcpu_nested_swtlb_process(struct kvm_vcpu *vcpu);

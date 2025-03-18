@@ -209,6 +209,22 @@ void kvm_riscv_hfence_vvma_all_process(struct kvm_vcpu *vcpu)
 		kvm_riscv_local_hfence_vvma_all(vmid);
 }
 
+void kvm_riscv_nested_hfence_gvma_all_process(struct kvm_vcpu *vcpu)
+{
+	kvm_riscv_vcpu_nested_swtlb_flush_guest(vcpu, 0, 0, 0);
+}
+
+void kvm_riscv_nested_hfence_vvma_all_process(struct kvm_vcpu *vcpu)
+{
+	struct kvm_vmid *v = &vcpu->kvm->arch.vmid;
+	unsigned long vmid = kvm_riscv_gstage_nested_vmid(READ_ONCE(v->vmid));
+
+	if (kvm_riscv_nacl_available())
+		nacl_hfence_vvma_all(nacl_shmem(), vmid);
+	else
+		kvm_riscv_local_hfence_vvma_all(vmid);
+}
+
 static bool vcpu_hfence_dequeue(struct kvm_vcpu *vcpu,
 				struct kvm_riscv_hfence *out_data)
 {
@@ -299,6 +315,20 @@ void kvm_riscv_hfence_process(struct kvm_vcpu *vcpu)
 			else
 				kvm_riscv_local_hfence_vvma_gva(d.vmid, d.addr,
 								d.size, d.order);
+			break;
+		case KVM_RISCV_NESTED_HFENCE_GVMA_GPA:
+			kvm_riscv_vcpu_pmu_incr_fw(vcpu, SBI_PMU_FW_HFENCE_GVMA_RCVD);
+			kvm_riscv_vcpu_nested_swtlb_flush_guest(vcpu, d.addr, d.size,
+								d.order);
+			break;
+		case KVM_RISCV_NESTED_HFENCE_GVMA_VMID_GPA:
+			kvm_riscv_vcpu_pmu_incr_fw(vcpu, SBI_PMU_FW_HFENCE_GVMA_VMID_RCVD);
+			kvm_riscv_vcpu_nested_swtlb_flush_guest_vmid(vcpu, d.addr, d.size,
+								     d.order, d.vmid);
+			break;
+		case KVM_RISCV_NESTED_HFENCE_GVMA_VMID_ALL:
+			kvm_riscv_vcpu_pmu_incr_fw(vcpu, SBI_PMU_FW_HFENCE_GVMA_VMID_RCVD);
+			kvm_riscv_vcpu_nested_swtlb_flush_guest_vmid(vcpu, 0, 0, 0, d.vmid);
 			break;
 		default:
 			break;
@@ -430,4 +460,116 @@ void kvm_riscv_hfence_vvma_all(struct kvm *kvm,
 {
 	make_xfence_request(kvm, hbase, hmask, KVM_REQ_HFENCE_VVMA_ALL,
 			    KVM_REQ_HFENCE_VVMA_ALL, NULL);
+}
+
+void kvm_riscv_nested_hfence_gvma_gpa(struct kvm *kvm,
+				      unsigned long hbase, unsigned long hmask,
+				      gpa_t gpa, gpa_t gpsz,
+				      unsigned long order)
+{
+	struct kvm_riscv_hfence data;
+
+	data.type = KVM_RISCV_NESTED_HFENCE_GVMA_GPA;
+	data.asid = data.vmid = 0;
+	data.addr = gpa;
+	data.size = gpsz;
+	data.order = order;
+	make_xfence_request(kvm, hbase, hmask, KVM_REQ_HFENCE,
+			    KVM_REQ_NESTED_HFENCE_GVMA_ALL, &data);
+}
+
+void kvm_riscv_nested_hfence_gvma_all(struct kvm *kvm,
+				      unsigned long hbase, unsigned long hmask)
+{
+	make_xfence_request(kvm, hbase, hmask, KVM_REQ_NESTED_HFENCE_GVMA_ALL,
+			    KVM_REQ_NESTED_HFENCE_GVMA_ALL, NULL);
+}
+
+void kvm_riscv_nested_hfence_gvma_vmid_gpa(struct kvm *kvm,
+					   unsigned long hbase, unsigned long hmask,
+					   gpa_t gpa, gpa_t gpsz,
+					   unsigned long order, unsigned long vmid)
+{
+	struct kvm_riscv_hfence data;
+
+	data.type = KVM_RISCV_NESTED_HFENCE_GVMA_VMID_GPA;
+	data.asid = 0;
+	data.vmid = vmid;
+	data.addr = gpa;
+	data.size = gpsz;
+	data.order = order;
+	make_xfence_request(kvm, hbase, hmask, KVM_REQ_HFENCE,
+			    KVM_REQ_NESTED_HFENCE_GVMA_ALL, &data);
+}
+
+void kvm_riscv_nested_hfence_gvma_vmid_all(struct kvm *kvm,
+					   unsigned long hbase, unsigned long hmask,
+					   unsigned long vmid)
+{
+	struct kvm_riscv_hfence data;
+
+	data.type = KVM_RISCV_NESTED_HFENCE_GVMA_VMID_ALL;
+	data.asid = 0;
+	data.vmid = vmid;
+	data.addr = data.size = data.order = 0;
+	make_xfence_request(kvm, hbase, hmask, KVM_REQ_HFENCE,
+			    KVM_RISCV_NESTED_HFENCE_GVMA_VMID_ALL, &data);
+}
+
+void kvm_riscv_nested_hfence_vvma_all(struct kvm *kvm,
+				      unsigned long hbase, unsigned long hmask)
+{
+	make_xfence_request(kvm, hbase, hmask, KVM_REQ_NESTED_HFENCE_VVMA_ALL,
+			    KVM_REQ_NESTED_HFENCE_VVMA_ALL, NULL);
+}
+
+void kvm_riscv_nested_hfence_vvma_gva(struct kvm *kvm,
+				      unsigned long hbase, unsigned long hmask,
+				      unsigned long gva, unsigned long gvsz,
+				      unsigned long order)
+{
+	struct kvm_vmid *v = &kvm->arch.vmid;
+	struct kvm_riscv_hfence data;
+
+	data.type = KVM_RISCV_HFENCE_VVMA_GVA;
+	data.asid = 0;
+	data.vmid = kvm_riscv_gstage_nested_vmid(READ_ONCE(v->vmid));
+	data.addr = gva;
+	data.size = gvsz;
+	data.order = order;
+	make_xfence_request(kvm, hbase, hmask, KVM_REQ_HFENCE,
+			    KVM_REQ_NESTED_HFENCE_VVMA_ALL, &data);
+}
+
+void kvm_riscv_nested_hfence_vvma_asid_gva(struct kvm *kvm,
+					   unsigned long hbase, unsigned long hmask,
+					   unsigned long gva, unsigned long gvsz,
+					   unsigned long order, unsigned long asid)
+{
+	struct kvm_vmid *v = &kvm->arch.vmid;
+	struct kvm_riscv_hfence data;
+
+	data.type = KVM_RISCV_HFENCE_VVMA_ASID_GVA;
+	data.asid = asid;
+	data.vmid = kvm_riscv_gstage_nested_vmid(READ_ONCE(v->vmid));
+	data.addr = gva;
+	data.size = gvsz;
+	data.order = order;
+	make_xfence_request(kvm, hbase, hmask, KVM_REQ_HFENCE,
+			    KVM_REQ_NESTED_HFENCE_VVMA_ALL, &data);
+}
+
+void kvm_riscv_nested_hfence_vvma_asid_all(struct kvm *kvm,
+					   unsigned long hbase, unsigned long hmask,
+					   unsigned long asid)
+{
+	struct kvm_vmid *v = &kvm->arch.vmid;
+	struct kvm_riscv_hfence data;
+
+	data.type = KVM_RISCV_HFENCE_VVMA_ASID_ALL;
+	data.asid = asid;
+	data.vmid = kvm_riscv_gstage_nested_vmid(READ_ONCE(v->vmid));
+	data.addr = data.size = data.order = 0;
+	make_xfence_request(kvm, hbase, hmask, KVM_REQ_HFENCE,
+			    KVM_REQ_NESTED_HFENCE_VVMA_ALL, &data);
 }

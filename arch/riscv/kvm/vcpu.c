@@ -731,6 +731,12 @@ static void kvm_riscv_check_vcpu_requests(struct kvm_vcpu *vcpu)
 		if (kvm_check_request(KVM_REQ_STEAL_UPDATE, vcpu))
 			kvm_riscv_vcpu_record_steal_time(vcpu);
 
+		if (kvm_check_request(KVM_REQ_NESTED_HFENCE_GVMA_ALL, vcpu))
+			kvm_riscv_nested_hfence_gvma_all_process(vcpu);
+
+		if (kvm_check_request(KVM_REQ_NESTED_HFENCE_VVMA_ALL, vcpu))
+			kvm_riscv_nested_hfence_vvma_all_process(vcpu);
+
 		/*
 		 * Process nested software TLB request after handling
 		 * various HFENCE requests.

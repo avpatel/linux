@@ -19,6 +19,19 @@ int kvm_riscv_vcpu_nested_gstage_xlate(struct kvm_vcpu *vcpu,
 	return 0;
 }
 
+void kvm_riscv_vcpu_nested_swtlb_flush_guest(struct kvm_vcpu *vcpu,
+					     gpa_t addr, gpa_t size, unsigned long order)
+{
+	/* TODO: */
+}
+
+void kvm_riscv_vcpu_nested_swtlb_flush_guest_vmid(struct kvm_vcpu *vcpu,
+						  gpa_t addr, gpa_t size, unsigned long order,
+						  unsigned long vmid)
+{
+	/* TODO: */
+}
+
 void kvm_riscv_vcpu_nested_swtlb_flush_host(struct kvm_vcpu *vcpu,
 					    gpa_t addr, gpa_t size, unsigned long order)
 {
