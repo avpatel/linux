@@ -12,7 +12,7 @@
 
 /* When entering handle_sse, the following registers are set:
  * a6: contains the hartid
- * a6: contains struct sse_registered_event pointer
+ * a7: contains struct sse_registered_event pointer
  */
 SYM_CODE_START(handle_sse)
 	/* Save stack temporarily */
