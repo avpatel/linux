@@ -100,12 +100,12 @@ int arch_sse_init_event(struct sse_event_arch_data *arch_evt, u32 evt_id, int cp
 	if (sse_init_scs(cpu, arch_evt))
 		goto free_stack;
 
-	if (is_kernel_percpu_address((unsigned long)&arch_evt->interrupted)) {
-		arch_evt->interrupted_state_phys =
-				per_cpu_ptr_to_phys(&arch_evt->interrupted);
-	} else {
+	if (sse_event_is_global(evt_id)) {
 		arch_evt->interrupted_state_phys =
 				virt_to_phys(&arch_evt->interrupted);
+	} else {
+		arch_evt->interrupted_state_phys =
+				per_cpu_ptr_to_phys(&arch_evt->interrupted);
 	}
 
 	return 0;

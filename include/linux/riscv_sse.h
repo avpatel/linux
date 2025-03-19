@@ -8,11 +8,17 @@
 
 #include <linux/types.h>
 #include <linux/linkage.h>
+#include <asm/sbi.h>
 
 struct sse_event;
 struct pt_regs;
 
 typedef int (sse_event_handler)(u32 event_num, void *arg, struct pt_regs *regs);
+
+static inline bool sse_event_is_global(u32 evt)
+{
+	return !!(evt & SBI_SSE_EVENT_GLOBAL);
+}
 
 #ifdef CONFIG_RISCV_SSE
 

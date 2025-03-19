@@ -60,11 +60,6 @@ void sse_handle_event(struct sse_event_arch_data *arch_event,
 			ret);
 }
 
-static bool sse_event_is_global(u32 evt)
-{
-	return !!(evt & SBI_SSE_EVENT_GLOBAL);
-}
-
 static
 struct sse_event *sse_event_get(u32 evt)
 {
