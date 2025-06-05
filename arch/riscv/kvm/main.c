@@ -119,6 +119,8 @@ static int __init riscv_kvm_init(void)
 		return rc;
 	}
 
+	kvm_riscv_nested_init();
+
 	kvm_info("hypervisor extension available\n");
 
 	if (kvm_riscv_nacl_available()) {
@@ -151,6 +153,9 @@ static int __init riscv_kvm_init(void)
 		kvm_info("using SBI nested acceleration with %s\n",
 			 (rc) ? slist : "no features");
 	}
+
+	if (kvm_riscv_nested_available())
+		kvm_info("nested virtualization available\n");
 
 	kvm_info("using %s G-stage page table format\n", str);
 
