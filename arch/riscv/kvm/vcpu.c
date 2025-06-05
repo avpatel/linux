@@ -94,6 +94,8 @@ static void kvm_riscv_reset_vcpu(struct kvm_vcpu *vcpu, bool kvm_sbi_reset)
 
 	kvm_riscv_vcpu_context_reset(vcpu, kvm_sbi_reset);
 
+	kvm_riscv_vcpu_nested_reset(vcpu);
+
 	kvm_riscv_vcpu_fp_reset(vcpu);
 
 	kvm_riscv_vcpu_vector_reset(vcpu);
@@ -152,9 +154,15 @@ int kvm_arch_vcpu_create(struct kvm_vcpu *vcpu)
 
 	spin_lock_init(&vcpu->arch.reset_state.lock);
 
-	rc = kvm_riscv_vcpu_alloc_vector_context(vcpu);
+	rc = kvm_riscv_vcpu_nested_init(vcpu);
 	if (rc)
 		return rc;
+
+	rc = kvm_riscv_vcpu_alloc_vector_context(vcpu);
+	if (rc) {
+		kvm_riscv_vcpu_nested_deinit(vcpu);
+		return rc;
+	}
 
 	/* Setup VCPU timer */
 	kvm_riscv_vcpu_timer_init(vcpu);
@@ -205,6 +213,9 @@ void kvm_arch_vcpu_destroy(struct kvm_vcpu *vcpu)
 
 	/* Free vector context space for host and guest kernel */
 	kvm_riscv_vcpu_free_vector_context(vcpu);
+
+	/* Cleanup VCPU nested state */
+	kvm_riscv_vcpu_nested_deinit(vcpu);
 }
 
 int kvm_cpu_has_pending_timer(struct kvm_vcpu *vcpu)
@@ -678,6 +689,13 @@ static int kvm_riscv_check_vcpu_requests(struct kvm_vcpu *vcpu)
 		if (kvm_check_request(KVM_REQ_STEAL_UPDATE, vcpu))
 			kvm_riscv_vcpu_record_steal_time(vcpu);
 
+		/*
+		 * Process nested software TLB request after handling
+		 * various HFENCE requests.
+		 */
+		if (kvm_check_request(KVM_REQ_NESTED_SWTLB, vcpu))
+			kvm_riscv_vcpu_nested_swtlb_process(vcpu);
+
 		if (kvm_dirty_ring_check_request(vcpu))
 			return 0;
 	}
@@ -910,6 +928,9 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu)
 		 * updated using kvm_riscv_gstage_vmid_ver_changed()
 		 */
 		kvm_riscv_gstage_vmid_sanitize(vcpu);
+
+		/* Check and inject nested virtual interrupts */
+		kvm_riscv_vcpu_nested_vsirq_process(vcpu);
 
 		trace_kvm_entry(vcpu);
 
