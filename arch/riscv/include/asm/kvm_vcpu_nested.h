@@ -62,6 +62,15 @@ void kvm_riscv_vcpu_nested_swtlb_process(struct kvm_vcpu *vcpu);
 void kvm_riscv_vcpu_nested_swtlb_request(struct kvm_vcpu *vcpu,
 					 const struct kvm_gstage_mapping *guest_map,
 					 const struct kvm_gstage_mapping *host_map);
+
+enum kvm_vcpu_nested_set_virt_event {
+	NESTED_SET_VIRT_EVENT_TRAP = 0,
+	NESTED_SET_VIRT_EVENT_SRET
+};
+
+void kvm_riscv_vcpu_nested_set_virt(struct kvm_vcpu *vcpu,
+				    enum kvm_vcpu_nested_set_virt_event event,
+				    bool virt, bool svpv, bool gva);
 void kvm_riscv_vcpu_nested_vsirq_process(struct kvm_vcpu *vcpu);
 void kvm_riscv_vcpu_nested_reset(struct kvm_vcpu *vcpu);
 void kvm_riscv_nested_init(void);
