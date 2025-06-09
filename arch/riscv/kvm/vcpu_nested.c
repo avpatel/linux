@@ -45,6 +45,13 @@ void kvm_riscv_vcpu_nested_swtlb_request(struct kvm_vcpu *vcpu,
 	kvm_make_request(KVM_REQ_NESTED_SWTLB, vcpu);
 }
 
+void kvm_riscv_vcpu_nested_set_virt(struct kvm_vcpu *vcpu,
+				    enum kvm_vcpu_nested_set_virt_event event,
+				    bool virt, bool svpv, bool gva)
+{
+	/* TODO: */
+}
+
 void kvm_riscv_vcpu_nested_vsirq_process(struct kvm_vcpu *vcpu)
 {
 	struct kvm_vcpu_nested *ns = &vcpu->arch.nested;
