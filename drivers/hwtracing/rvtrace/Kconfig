@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+menuconfig RVTRACE
+	tristate "RISC-V Trace Support"
+	depends on RISCV
+	depends on OF
+	default RISCV
+	help
+	  This framework provides a kernel interface for the RISC-V trace
+	  drivers (including both e-trace and n-trace). It's intended to
+	  build a topological view of the RISC-V trace components and
+	  configure the right series of components when trace is enabled
+	  on a CPU.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called rvtrace.
