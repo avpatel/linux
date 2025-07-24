@@ -17,6 +17,12 @@
 
 #include "iommu-bits.h"
 
+struct riscv_iommu_msiptp_state {
+	u64 msiptp;
+	u64 msi_addr_mask;
+	u64 msi_addr_pattern;
+};
+
 /* This struct contains protection domain specific IOMMU driver data. */
 struct riscv_iommu_domain {
 	struct iommu_domain domain;
@@ -27,6 +33,12 @@ struct riscv_iommu_domain {
 	int numa_node;
 	unsigned int pgd_mode;
 	unsigned long *pgd_root;
+	struct riscv_iommu_msipte *msi_root;
+	spinlock_t msi_lock;
+	u32 group_index_bits;
+	u32 group_index_shift;
+	size_t imsic_stride;
+	struct riscv_iommu_msiptp_state msiptp;
 	struct irq_domain *irqdomain;
 };
 
@@ -87,6 +99,7 @@ int riscv_iommu_ir_irq_domain_create(struct riscv_iommu_domain *domain,
 void riscv_iommu_ir_irq_domain_remove(struct riscv_iommu_domain *domain);
 void riscv_iommu_ir_irq_domain_unlink(struct riscv_iommu_domain *domain,
 				      struct device *dev);
+void riscv_iommu_ir_get_resv_regions(struct device *dev, struct list_head *head);
 
 #define riscv_iommu_readl(iommu, addr) \
 	readl_relaxed((iommu)->reg + (addr))
