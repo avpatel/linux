@@ -45,6 +45,7 @@ struct riscv_iommu_domain {
 	u32 group_index_shift;
 	size_t imsic_stride;
 	struct riscv_iommu_msiptp_state msiptp;
+	refcount_t *msi_pte_counts;
 	struct irq_domain *irqdomain;
 };
 
