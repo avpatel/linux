@@ -46,6 +46,7 @@ struct riscv_iommu_domain {
 	size_t imsic_stride;
 	struct riscv_iommu_msiptp_state msiptp;
 	refcount_t *msi_pte_counts;
+	bool msi_mrif;
 	struct irq_domain *irqdomain;
 };
 

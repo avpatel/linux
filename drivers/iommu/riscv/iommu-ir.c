@@ -9,6 +9,8 @@
 #include <linux/msi.h>
 #include <linux/sizes.h>
 
+#include <asm/irq.h>
+
 #include "../iommu-pages.h"
 #include "iommu.h"
 
@@ -208,6 +210,17 @@ static void riscv_iommu_ir_msitbl_disable(struct riscv_iommu_domain *domain)
 	riscv_iommu_ir_msitbl_update(domain, &domain->msiptp);
 }
 
+static void riscv_iommu_ir_msitbl_reset(struct riscv_iommu_domain *domain)
+{
+	if (domain->pgd_mode)
+		riscv_iommu_ir_unmap_imsics(domain);
+
+	for (size_t i = 0; i < riscv_iommu_ir_nr_msiptes(domain); i++) {
+		riscv_iommu_ir_clear_pte(&domain->msi_root[i]);
+		refcount_set(&domain->msi_pte_counts[i], 0);
+	}
+}
+
 static void riscv_iommu_ir_msitbl_map(struct riscv_iommu_domain *domain, size_t idx,
 				      phys_addr_t addr)
 {
@@ -276,12 +289,107 @@ static int riscv_iommu_ir_irq_set_affinity(struct irq_data *data,
 	return ret;
 }
 
+static bool riscv_iommu_ir_check_config(struct riscv_iommu_domain *domain,
+					struct riscv_iommu_ir_vcpu_info *vcpu_info)
+{
+	return domain->msiptp.msi_addr_mask == vcpu_info->msi_addr_mask &&
+	       domain->msiptp.msi_addr_pattern == vcpu_info->msi_addr_pattern &&
+	       domain->group_index_bits == vcpu_info->group_index_bits &&
+	       domain->group_index_shift == vcpu_info->group_index_shift;
+}
+
+static int riscv_iommu_ir_irq_set_vcpu_affinity(struct irq_data *data, void *info)
+{
+	struct riscv_iommu_domain *domain = data->domain->host_data;
+	struct riscv_iommu_ir_vcpu_info *vcpu_info = info;
+	struct riscv_iommu_msipte *old_pte, *new_pte;
+	struct riscv_iommu_msipte new_pteval;
+	size_t old_idx = -1, new_idx = -1;
+	bool new_config = false;
+	int ret = -EINVAL;
+
+	if (!vcpu_info)
+		return ret;
+
+	/* TODO: Add MRIF support */
+
+	spin_lock(&domain->msi_lock);
+
+	if (vcpu_info->gpa == VCPU_INFO_INVALID_GPA) {
+		if (WARN_ON_ONCE(vcpu_info->prev_gpa == VCPU_INFO_INVALID_GPA))
+			goto out;
+	} else if (!riscv_iommu_ir_check_config(domain, vcpu_info)) {
+		new_config = true;
+		riscv_iommu_ir_msitbl_reset(domain);
+		domain->msiptp.msi_addr_mask = vcpu_info->msi_addr_mask;
+		domain->msiptp.msi_addr_pattern = vcpu_info->msi_addr_pattern;
+		domain->group_index_bits = vcpu_info->group_index_bits;
+		domain->group_index_shift = vcpu_info->group_index_shift;
+		domain->imsic_stride = SZ_4K;
+
+		if (domain->pgd_mode) {
+			/*
+			 * As in riscv_iommu_ir_irq_domain_create(), we do all stage1
+			 * mappings up front since the MSI table will manage the
+			 * translations.
+			 */
+			ret = riscv_iommu_ir_map_imsics(domain, GFP_KERNEL_ACCOUNT | GFP_ATOMIC);
+			if (ret)
+				goto out;
+		}
+	}
+
+	if (vcpu_info->prev_gpa != VCPU_INFO_INVALID_GPA) {
+		if (!WARN_ON_ONCE(new_config)) {
+			old_idx = riscv_iommu_ir_get_msipte_idx(domain, vcpu_info->prev_gpa);
+			old_pte = &domain->msi_root[old_idx];
+		}
+	}
+
+	if (vcpu_info->gpa != VCPU_INFO_INVALID_GPA) {
+		new_idx = riscv_iommu_ir_get_msipte_idx(domain, vcpu_info->gpa);
+		new_pte = &domain->msi_root[new_idx];
+		riscv_iommu_ir_set_pte(&new_pteval, vcpu_info->hpa);
+	}
+
+	ret = 0;
+
+	if (new_config) {
+		*new_pte = new_pteval;
+		riscv_iommu_ir_msitbl_update(domain, &domain->msiptp);
+		refcount_set(&domain->msi_pte_counts[new_idx], 1);
+		goto out;
+	}
+
+	if (old_idx != -1 && new_idx == old_idx && new_pteval.pte == old_pte->pte)
+		goto out;
+
+	if (old_idx != -1 && refcount_dec_and_test(&domain->msi_pte_counts[old_idx])) {
+		riscv_iommu_ir_clear_pte(old_pte);
+		riscv_iommu_ir_msitbl_inval(domain, old_pte);
+	}
+
+	if (new_idx != -1) {
+		if (new_pteval.pte != new_pte->pte) {
+			*new_pte = new_pteval;
+			riscv_iommu_ir_msitbl_inval(domain, new_pte);
+		}
+		if (!refcount_inc_not_zero(&domain->msi_pte_counts[new_idx]))
+			refcount_set(&domain->msi_pte_counts[new_idx], 1);
+	}
+
+out:
+	spin_unlock(&domain->msi_lock);
+	return ret;
+}
+
 static struct irq_chip riscv_iommu_ir_irq_chip = {
 	.name			= "IOMMU-IR",
 	.irq_ack		= irq_chip_ack_parent,
 	.irq_mask		= irq_chip_mask_parent,
 	.irq_unmask		= irq_chip_unmask_parent,
 	.irq_set_affinity	= riscv_iommu_ir_irq_set_affinity,
+	.irq_set_vcpu_affinity	= riscv_iommu_ir_irq_set_vcpu_affinity,
 };
 
 static int riscv_iommu_ir_irq_domain_alloc_irqs(struct irq_domain *irqdomain,
@@ -357,8 +465,12 @@ int riscv_iommu_ir_irq_domain_create(struct riscv_iommu_domain *domain,
 	int ret;
 
 	if (domain->irqdomain) {
+		if (domain->msi_mrif && !(iommu->caps & RISCV_IOMMU_CAPABILITIES_MSI_MRIF))
+			return -ENOSYS;
 		dev_set_msi_domain(dev, domain->irqdomain);
 		return 0;
+	} else if (iommu->caps & RISCV_IOMMU_CAPABILITIES_MSI_MRIF) {
+		domain->msi_mrif = true;
 	}
 
 	if (!(iommu->caps & RISCV_IOMMU_CAPABILITIES_MSI_FLAT))
@@ -390,7 +502,19 @@ int riscv_iommu_ir_irq_domain_create(struct riscv_iommu_domain *domain,
 			return ret;
 	}
 
+	/*
+	 * With MRIF support the hypervisor may create guests with more vcpus than
+	 * the host has harts (a.k.a overcommit). Since guest_index_bits must already
+	 * be considered when creating msi_addr_mask, leading to extra PTEs in the
+	 * MSI table, then the MSI table should generally be large enough for
+	 * overcommitted guests. However, if the IMSICs don't have many or any guest
+	 * interrupt files, then we bump the number of PTEs to ensure we can support
+	 * a 3:1 guest overcommit (which hopefully nobody ever creates...)
+	 */
 	nr_ptes = riscv_iommu_ir_nr_msiptes(domain);
+	if (domain->msi_mrif && imsic_global->guest_index_bits < 2)
+		nr_ptes += BIT(imsic_global->hart_index_bits) * 3;
+
 	spin_lock_init(&domain->msi_lock);
 	domain->msi_root = iommu_alloc_pages_node_sz(domain->numa_node, GFP_KERNEL_ACCOUNT,
 						     nr_ptes * sizeof(*domain->msi_root));
