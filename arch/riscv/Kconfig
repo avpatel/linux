@@ -552,6 +552,17 @@ config RISCV_COMBO_SPINLOCKS
 
 endchoice
 
+config HW_BREAKPOINT_COMPUTE_STEP
+	bool "Allow computing hardware breakpoint step address"
+	default n
+	depends on HAVE_HW_BREAKPOINT
+	help
+	  Select this option if hardware breakpoints are desired, but
+	  hardware or SBI does not have icount functionality. This may cause
+	  unwanted side effects when reading the instruction from memory.
+
+	  If unsure, say N.
+
 config RISCV_ALTERNATIVE
 	bool
 	depends on !XIP_KERNEL
