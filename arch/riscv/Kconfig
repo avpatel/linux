@@ -554,7 +554,7 @@ endchoice
 
 config HW_BREAKPOINT_COMPUTE_STEP
 	bool "Allow computing hardware breakpoint step address"
-	default n
+	default y
 	depends on HAVE_HW_BREAKPOINT
 	help
 	  Select this option if hardware breakpoints are desired, but
