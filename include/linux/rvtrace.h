@@ -335,4 +335,7 @@ static inline void rvtrace_unregister_driver(struct rvtrace_driver *rtdrv)
 		driver_unregister(&rtdrv->driver);
 }
 
+int rvtrace_perf_init(void);
+void rvtrace_perf_exit(void);
+
 #endif
