@@ -575,6 +575,9 @@
 			      : "memory");			\
 })
 
+unsigned long csr_read_num(unsigned long csr_num, int *out_err);
+void csr_write_num(unsigned long csr_num, unsigned long val, int *out_err);
+
 #endif /* __ASSEMBLER__ */
 
 #endif /* _ASM_RISCV_CSR_H */
