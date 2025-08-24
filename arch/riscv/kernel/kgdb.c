@@ -35,10 +35,10 @@ static int do_single_step(struct pt_regs *regs)
 	addr = get_step_address(regs, insn);
 
 	/* Store the op code in the stepped address */
-	error = get_insn(regs, addr, stepped_opcode);
+	error = get_insn(regs, addr, &insn);
 	if (error)
 		return error;
-
+	stepped_opcode = insn;
 	stepped_address = addr;
 
 	/* Replace the op code with the break instruction */
