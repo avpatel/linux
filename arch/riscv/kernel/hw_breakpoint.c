@@ -108,7 +108,11 @@ static int arch_smp_setup_sbi_shmem(unsigned int cpu)
 	shmem_pa = virt_to_phys(dbtr_shmem);
 
 	ret = sbi_ecall(SBI_EXT_DBTR, SBI_EXT_DBTR_SETUP_SHMEM,
+#ifdef CONFIG_32BIT
 			SBI_SHMEM_LO(shmem_pa), SBI_SHMEM_HI(shmem_pa), 0, 0, 0, 0);
+#else
+			shmem_pa, 0, 0, 0, 0, 0);
+#endif
 	if (ret.error) {
 		pr_warn("%s: failed to setup shared memory. error: %ld\n", __func__, ret.error);
 		return sbi_err_map_linux_errno(ret.error);
