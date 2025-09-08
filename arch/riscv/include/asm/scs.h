@@ -18,6 +18,11 @@
 	load_per_cpu gp, irq_shadow_call_stack_ptr, \tmp
 .endm
 
+/* Load the per-CPU IRQ shadow call stack to gp. */
+.macro scs_load_sse_stack reg_evt
+	REG_L gp, SSE_REG_EVT_SHADOW_STACK(\reg_evt)
+.endm
+
 /* Load task_scs_sp(current) to gp. */
 .macro scs_load_current
 	REG_L	gp, TASK_TI_SCS_SP(tp)
@@ -40,6 +45,8 @@ _skip_scs:
 .macro scs_load_init_stack
 .endm
 .macro scs_load_irq_stack tmp
+.endm
+.macro scs_load_sse_stack reg_evt
 .endm
 .macro scs_load_current
 .endm
