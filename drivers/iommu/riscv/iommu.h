@@ -30,6 +30,9 @@ struct riscv_iommu_domain {
 	struct riscv_iommu_msipte *msi_root;
 	u64 msi_addr_mask;
 	u64 msi_addr_pattern;
+	u32 group_index_bits;
+	u32 group_index_shift;
+	size_t imsic_stride;
 };
 
 /* Private IOMMU data for managed devices, dev_iommu_priv_* */
@@ -97,6 +100,7 @@ void riscv_iommu_ir_irq_domain_remove(struct riscv_iommu_info *info);
 int riscv_iommu_ir_attach_paging_domain(struct riscv_iommu_domain *domain,
 					struct device *dev);
 void riscv_iommu_ir_free_paging_domain(struct riscv_iommu_domain *domain);
+void riscv_iommu_ir_get_resv_regions(struct device *dev, struct list_head *head);
 
 #define riscv_iommu_readl(iommu, addr) \
 	readl_relaxed((iommu)->reg + (addr))
