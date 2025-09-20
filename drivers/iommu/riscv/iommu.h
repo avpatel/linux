@@ -34,6 +34,8 @@ struct riscv_iommu_domain {
 	unsigned int pgd_mode;
 	unsigned long *pgd_root;
 	struct riscv_iommu_msipte *msi_root;
+	refcount_t *msi_pte_counts;
+	raw_spinlock_t msi_lock;
 	u64 msi_addr_mask;
 	u64 msi_addr_pattern;
 	u32 group_index_bits;
