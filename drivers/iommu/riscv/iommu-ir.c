@@ -4,10 +4,107 @@
  *
  * Copyright © 2025 Ventana Micro Systems Inc.
  */
+#include <linux/irqchip/riscv-imsic.h>
 #include <linux/irqdomain.h>
 #include <linux/msi.h>
+#include <linux/sizes.h>
 
+#include "../iommu-pages.h"
 #include "iommu.h"
+
+static size_t riscv_iommu_ir_group_size(struct riscv_iommu_domain *domain)
+{
+	phys_addr_t mask = domain->msi_addr_mask;
+
+	if (domain->group_index_bits) {
+		phys_addr_t group_mask = BIT(domain->group_index_bits) - 1;
+		phys_addr_t group_shift = domain->group_index_shift - 12;
+
+		mask &= ~(group_mask << group_shift);
+	}
+
+	return (mask + 1) << 12;
+}
+
+static int riscv_iommu_ir_map_unmap_imsics(struct riscv_iommu_domain *domain, bool map,
+					   gfp_t gfp, size_t *unmapped)
+{
+	phys_addr_t base = domain->msi_addr_pattern << 12, addr;
+	size_t stride = domain->imsic_stride, map_size = SZ_4K, size;
+	size_t i, j;
+
+	size = riscv_iommu_ir_group_size(domain);
+
+	if (stride == SZ_4K)
+		stride = map_size = size;
+
+	for (i = 0; i < BIT(domain->group_index_bits); i++) {
+		for (j = 0; j < size; j += stride) {
+			addr = (base + j) | (i << domain->group_index_shift);
+			if (map) {
+				int ret = iommu_map(&domain->domain, addr, addr, map_size,
+						    IOMMU_WRITE | IOMMU_NOEXEC | IOMMU_MMIO, gfp);
+				if (ret)
+					return ret;
+			} else {
+				*unmapped += iommu_unmap(&domain->domain, addr, map_size);
+			}
+		}
+	}
+
+	return 0;
+}
+
+static size_t riscv_iommu_ir_unmap_imsics(struct riscv_iommu_domain *domain)
+{
+	size_t unmapped = 0;
+
+	riscv_iommu_ir_map_unmap_imsics(domain, false, 0, &unmapped);
+
+	return unmapped;
+}
+
+static int riscv_iommu_ir_map_imsics(struct riscv_iommu_domain *domain, gfp_t gfp)
+{
+	int ret;
+
+	ret = riscv_iommu_ir_map_unmap_imsics(domain, true, gfp, NULL);
+	if (ret)
+		riscv_iommu_ir_unmap_imsics(domain);
+
+	return ret;
+}
+
+static size_t riscv_iommu_ir_compute_msipte_idx(struct riscv_iommu_domain *domain,
+						phys_addr_t msi_pa)
+{
+	phys_addr_t mask = domain->msi_addr_mask;
+	phys_addr_t addr = msi_pa >> 12;
+	size_t idx;
+
+	if (domain->group_index_bits) {
+		phys_addr_t group_mask = BIT(domain->group_index_bits) - 1;
+		phys_addr_t group_shift = domain->group_index_shift - 12;
+		phys_addr_t group = (addr >> group_shift) & group_mask;
+
+		mask &= ~(group_mask << group_shift);
+		idx = addr & mask;
+		idx |= group << fls64(mask);
+	} else {
+		idx = addr & mask;
+	}
+
+	return idx;
+}
+
+static size_t riscv_iommu_ir_nr_msiptes(struct riscv_iommu_domain *domain)
+{
+	phys_addr_t base = domain->msi_addr_pattern << 12;
+	phys_addr_t max_addr = base | (domain->msi_addr_mask << 12);
+	size_t max_idx = riscv_iommu_ir_compute_msipte_idx(domain, max_addr);
+
+	return max_idx + 1;
+}
 
 static struct irq_chip riscv_iommu_ir_irq_chip = {
 	.name			= "IOMMU-IR",
@@ -90,12 +187,20 @@ struct irq_domain *riscv_iommu_ir_irq_domain_create(struct riscv_iommu_device *i
 	return irqdomain;
 }
 
+static void riscv_iommu_ir_free_msi_table(struct riscv_iommu_domain *domain)
+{
+	iommu_free_pages(domain->msi_root);
+}
+
 void riscv_iommu_ir_irq_domain_remove(struct riscv_iommu_info *info)
 {
+	struct riscv_iommu_domain *domain = info->domain;
 	struct fwnode_handle *fn;
 
 	if (!info->irqdomain)
 		return;
+
+	riscv_iommu_ir_free_msi_table(domain);
 
 	fn = info->irqdomain->fwnode;
 	irq_domain_remove(info->irqdomain);
@@ -103,12 +208,93 @@ void riscv_iommu_ir_irq_domain_remove(struct riscv_iommu_info *info)
 	irq_domain_free_fwnode(fn);
 }
 
+static int riscv_ir_set_imsic_global_config(struct riscv_iommu_device *iommu,
+					    struct riscv_iommu_domain *domain)
+{
+	const struct imsic_global_config *imsic_global;
+	u64 mask = 0;
+
+	imsic_global = imsic_get_global_config();
+
+	mask |= (BIT(imsic_global->group_index_bits) - 1) << (imsic_global->group_index_shift - 12);
+	mask |= BIT(imsic_global->hart_index_bits + imsic_global->guest_index_bits) - 1;
+	domain->msi_addr_mask = mask;
+	domain->msi_addr_pattern = imsic_global->base_addr >> 12;
+	domain->group_index_bits = imsic_global->group_index_bits;
+	domain->group_index_shift = imsic_global->group_index_shift;
+	domain->imsic_stride = BIT(imsic_global->guest_index_bits + 12);
+
+	if (iommu->caps & RISCV_IOMMU_CAPABILITIES_MSI_FLAT) {
+		size_t nr_ptes = riscv_iommu_ir_nr_msiptes(domain);
+
+		domain->msi_root = iommu_alloc_pages_node_sz(domain->numa_node, GFP_KERNEL_ACCOUNT,
+							     nr_ptes * sizeof(*domain->msi_root));
+		if (!domain->msi_root)
+			return -ENOMEM;
+	}
+
+	return 0;
+}
+
 int riscv_iommu_ir_attach_paging_domain(struct riscv_iommu_domain *domain,
 					struct device *dev)
 {
+	struct riscv_iommu_device *iommu = dev_to_iommu(dev);
+	struct riscv_iommu_info *info = dev_iommu_priv_get(dev);
+	int ret;
+
+	if (!info->irqdomain)
+		return 0;
+
+	/*
+	 * Do the domain's one-time setup of the msi configuration the
+	 * first time the domain is attached and the msis are enabled.
+	 */
+	if (domain->msi_addr_mask == 0) {
+		ret = riscv_ir_set_imsic_global_config(iommu, domain);
+		if (ret)
+			return ret;
+
+		/*
+		 * The RISC-V IOMMU MSI table is checked after the stage1 DMA
+		 * page tables. If we don't create identity mappings in the
+		 * stage1 table then we'll fault and won't even get a chance
+		 * to check the MSI table.
+		 */
+		if (domain->pgd_mode) {
+			ret = riscv_iommu_ir_map_imsics(domain, GFP_KERNEL_ACCOUNT);
+			if (ret) {
+				riscv_iommu_ir_free_msi_table(domain);
+				return ret;
+			}
+		}
+	}
+
 	return 0;
 }
 
 void riscv_iommu_ir_free_paging_domain(struct riscv_iommu_domain *domain)
 {
+	riscv_iommu_ir_free_msi_table(domain);
+}
+
+void riscv_iommu_ir_get_resv_regions(struct device *dev, struct list_head *head)
+{
+	const struct imsic_global_config *imsic_global;
+	struct iommu_resv_region *reg;
+	phys_addr_t addr;
+	size_t size, i;
+
+	imsic_global = imsic_get_global_config();
+	if (!imsic_global || !imsic_global->nr_ids)
+		return;
+
+	size = BIT(imsic_global->hart_index_bits + imsic_global->guest_index_bits + 12);
+
+	for (i = 0; i < BIT(imsic_global->group_index_bits); i++) {
+		addr = imsic_global->base_addr | (i << imsic_global->group_index_shift);
+		reg = iommu_alloc_resv_region(addr, size, 0, IOMMU_RESV_MSI, GFP_KERNEL);
+		if (reg)
+			list_add_tail(&reg->list, head);
+	}
 }
