@@ -27,11 +27,15 @@ struct riscv_iommu_domain {
 	int numa_node;
 	unsigned int pgd_mode;
 	unsigned long *pgd_root;
+	struct riscv_iommu_msipte *msi_root;
+	u64 msi_addr_mask;
+	u64 msi_addr_pattern;
 };
 
 /* Private IOMMU data for managed devices, dev_iommu_priv_* */
 struct riscv_iommu_info {
 	struct riscv_iommu_domain *domain;
+	struct irq_domain *irqdomain;
 };
 
 struct riscv_iommu_device;
@@ -85,6 +89,14 @@ struct riscv_iommu_device {
 int riscv_iommu_init(struct riscv_iommu_device *iommu);
 void riscv_iommu_remove(struct riscv_iommu_device *iommu);
 void riscv_iommu_disable(struct riscv_iommu_device *iommu);
+
+struct irq_domain *riscv_iommu_ir_irq_domain_create(struct riscv_iommu_device *iommu,
+						    struct device *dev,
+						    struct riscv_iommu_info *info);
+void riscv_iommu_ir_irq_domain_remove(struct riscv_iommu_info *info);
+int riscv_iommu_ir_attach_paging_domain(struct riscv_iommu_domain *domain,
+					struct device *dev);
+void riscv_iommu_ir_free_paging_domain(struct riscv_iommu_domain *domain);
 
 #define riscv_iommu_readl(iommu, addr) \
 	readl_relaxed((iommu)->reg + (addr))
