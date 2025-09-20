@@ -164,10 +164,41 @@ static void riscv_iommu_ir_msitbl_inval(struct riscv_iommu_domain *domain,
 	rcu_read_unlock();
 }
 
-static void riscv_iommu_ir_msitbl_map(struct riscv_iommu_domain *domain, size_t idx,
-				      phys_addr_t addr)
+struct riscv_iommu_ir_chip_data {
+	size_t idx;
+	u32 config;
+};
+
+static size_t riscv_iommu_ir_irq_msitbl_idx(struct irq_data *data)
+{
+	struct riscv_iommu_ir_chip_data *chip_data = irq_data_get_irq_chip_data(data);
+
+	return chip_data->idx;
+}
+
+static u32 riscv_iommu_ir_irq_msitbl_config(struct irq_data *data)
+{
+	struct riscv_iommu_ir_chip_data *chip_data = irq_data_get_irq_chip_data(data);
+
+	return chip_data->config;
+}
+
+static void riscv_iommu_ir_irq_set_msitbl_info(struct irq_data *data,
+					       size_t idx, u32 config)
+{
+	struct riscv_iommu_ir_chip_data *chip_data = irq_data_get_irq_chip_data(data);
+
+	chip_data->idx = idx;
+	chip_data->config = config;
+}
+
+static void riscv_iommu_ir_msitbl_map(struct riscv_iommu_domain *domain,
+				      struct irq_data *data,
+				      size_t idx, phys_addr_t addr)
 {
 	struct riscv_iommu_msipte *pte;
+
+	riscv_iommu_ir_irq_set_msitbl_info(data, idx, domain->msitbl_config);
 
 	if (!domain->msi_root)
 		return;
@@ -186,9 +217,17 @@ static void riscv_iommu_ir_msitbl_map(struct riscv_iommu_domain *domain, size_t 
 	}
 }
 
-static void riscv_iommu_ir_msitbl_unmap(struct riscv_iommu_domain *domain, size_t idx)
+static void riscv_iommu_ir_msitbl_unmap(struct riscv_iommu_domain *domain,
+					struct irq_data *data, size_t idx)
 {
 	struct riscv_iommu_msipte *pte;
+	u32 config;
+
+	config = riscv_iommu_ir_irq_msitbl_config(data);
+	riscv_iommu_ir_irq_set_msitbl_info(data, -1, -1);
+
+	if (WARN_ON_ONCE(config != domain->msitbl_config))
+		return;
 
 	if (!domain->msi_root)
 		return;
@@ -219,11 +258,11 @@ static int riscv_iommu_ir_irq_set_affinity(struct irq_data *data,
 {
 	struct riscv_iommu_info *info = data->domain->host_data;
 	struct riscv_iommu_domain *domain = info->domain;
-	phys_addr_t old_addr, new_addr;
 	size_t old_idx, new_idx;
+	phys_addr_t new_addr;
 	int ret;
 
-	old_idx = riscv_iommu_ir_get_msipte_idx_from_target(domain, data, &old_addr);
+	old_idx = riscv_iommu_ir_irq_msitbl_idx(data);
 
 	ret = irq_chip_set_affinity_parent(data, dest, force);
 	if (ret < 0)
@@ -234,8 +273,8 @@ static int riscv_iommu_ir_irq_set_affinity(struct irq_data *data,
 	if (new_idx == old_idx)
 		return ret;
 
-	riscv_iommu_ir_msitbl_unmap(domain, old_idx);
-	riscv_iommu_ir_msitbl_map(domain, new_idx, new_addr);
+	riscv_iommu_ir_msitbl_unmap(domain, data, old_idx);
+	riscv_iommu_ir_msitbl_map(domain, data, new_idx, new_addr);
 
 	return ret;
 }
@@ -254,10 +293,15 @@ static int riscv_iommu_ir_irq_domain_alloc_irqs(struct irq_domain *irqdomain,
 {
 	struct riscv_iommu_info *info = irqdomain->host_data;
 	struct riscv_iommu_domain *domain = info->domain;
+	struct riscv_iommu_ir_chip_data *chip_data;
 	struct irq_data *data;
 	phys_addr_t addr;
 	size_t idx;
 	int i, ret;
+
+	chip_data = kzalloc(sizeof(*chip_data), GFP_KERNEL_ACCOUNT);
+	if (!chip_data)
+		return -ENOMEM;
 
 	ret = irq_domain_alloc_irqs_parent(irqdomain, irq_base, nr_irqs, arg);
 	if (ret)
@@ -266,8 +310,9 @@ static int riscv_iommu_ir_irq_domain_alloc_irqs(struct irq_domain *irqdomain,
 	for (i = 0; i < nr_irqs; i++) {
 		data = irq_domain_get_irq_data(irqdomain, irq_base + i);
 		data->chip = &riscv_iommu_ir_irq_chip;
+		data->chip_data = chip_data;
 		idx = riscv_iommu_ir_get_msipte_idx_from_target(domain, data, &addr);
-		riscv_iommu_ir_msitbl_map(domain, idx, addr);
+		riscv_iommu_ir_msitbl_map(domain, data, idx, addr);
 	}
 
 	return 0;
@@ -280,14 +325,22 @@ static void riscv_iommu_ir_irq_domain_free_irqs(struct irq_domain *irqdomain,
 	struct riscv_iommu_info *info = irqdomain->host_data;
 	struct riscv_iommu_domain *domain = info->domain;
 	struct irq_data *data;
-	phys_addr_t addr;
+	u32 config;
 	size_t idx;
 	int i;
 
 	for (i = 0; i < nr_irqs; i++) {
 		data = irq_domain_get_irq_data(irqdomain, irq_base + i);
-		idx = riscv_iommu_ir_get_msipte_idx_from_target(domain, data, &addr);
-		riscv_iommu_ir_msitbl_unmap(domain, idx);
+		config = riscv_iommu_ir_irq_msitbl_config(data);
+		/*
+		 * Only irqs with matching config versions need to be unmapped here
+		 * since config changes will unmap everything.
+		 */
+		if (config == domain->msitbl_config) {
+			idx = riscv_iommu_ir_irq_msitbl_idx(data);
+			riscv_iommu_ir_msitbl_unmap(domain, data, idx);
+		}
+		kfree(data->chip_data);
 	}
 
 	irq_domain_free_irqs_parent(irqdomain, irq_base, nr_irqs);
