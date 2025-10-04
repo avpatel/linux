@@ -654,7 +654,7 @@ static int __init sse_init(void)
 	int ret;
 
 	if (sbi_probe_extension(SBI_EXT_SSE) <= 0) {
-		pr_err("Missing SBI SSE extension\n");
+		pr_info("Missing SBI SSE extension\n");
 		return -EOPNOTSUPP;
 	}
 	pr_info("SBI SSE extension detected\n");
