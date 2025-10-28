@@ -580,6 +580,7 @@ static int sse_cpu_teardown(unsigned int cpu)
 	int ret = 0;
 	unsigned int next_cpu;
 	struct sse_event *event;
+	struct sse_registered_event *reg_evt;
 
 	/* Mask the sse events */
 	ret = sse_events_mask();
@@ -588,8 +589,9 @@ static int sse_cpu_teardown(unsigned int cpu)
 
 	scoped_guard(spinlock, &events_list_lock) {
 		list_for_each_entry(event, &events, list) {
+			reg_evt = sse_get_reg_evt(event);
 			if (!sse_event_is_global(event->evt_id)) {
-				if (event->global->is_enabled)
+				if (reg_evt->is_enabled)
 					sse_event_disable_local(event);
 
 				sse_sbi_unregister_event(event);
@@ -606,16 +608,6 @@ static int sse_cpu_teardown(unsigned int cpu)
 	}
 
 	return ret;
-}
-
-static void sse_reset(void)
-{
-	struct sse_event *event;
-
-	list_for_each_entry(event, &events, list) {
-		sse_event_disable_nolock(event);
-		sse_event_unregister_nolock(event);
-	}
 }
 
 static int sse_pm_notifier(struct notifier_block *nb, unsigned long action,
@@ -649,7 +641,6 @@ static int sse_reboot_notifier(struct notifier_block *nb, unsigned long action,
 			       void *data)
 {
 	cpuhp_remove_state(sse_hp_state);
-	sse_reset();
 
 	return NOTIFY_OK;
 }
