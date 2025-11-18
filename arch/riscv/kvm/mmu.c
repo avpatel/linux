@@ -14,7 +14,6 @@
 #include <linux/kvm_host.h>
 #include <linux/sched/signal.h>
 #include <asm/kvm_mmu.h>
-#include <asm/kvm_nacl.h>
 
 static void mmu_wp_memory_region(struct kvm *kvm, int slot)
 {
@@ -457,16 +456,15 @@ void kvm_riscv_mmu_free_pgd(struct kvm *kvm)
 		free_pages((unsigned long)pgd, get_order(kvm_riscv_gstage_pgd_size));
 }
 
-void kvm_riscv_mmu_update_hgatp(struct kvm_vcpu *vcpu)
+void kvm_riscv_mmu_update_hgatp(struct kvm_vcpu *vcpu, bool nested_virt)
 {
-	unsigned long hgatp = kvm_riscv_gstage_mode << HGATP_MODE_SHIFT;
+	struct kvm_vcpu_nested_swtlb *nst = &vcpu->arch.nested.swtlb;
 	struct kvm_arch *k = &vcpu->kvm->arch;
+	unsigned long vmid = READ_ONCE(k->vmid.vmid);
 
-	hgatp |= (READ_ONCE(k->vmid.vmid) << HGATP_VMID_SHIFT) & HGATP_VMID;
-	hgatp |= (k->pgd_phys >> PAGE_SHIFT) & HGATP_PPN;
-
-	ncsr_write(CSR_HGATP, hgatp);
-
-	if (!kvm_riscv_gstage_vmid_bits())
-		kvm_riscv_local_hfence_gvma_all();
+	if (nested_virt)
+		kvm_riscv_gstage_update_hgatp(nst->shadow_pgd_phys,
+					      kvm_riscv_gstage_nested_vmid(vmid));
+	else
+		kvm_riscv_gstage_update_hgatp(k->pgd_phys, vmid);
 }
