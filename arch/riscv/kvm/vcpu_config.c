@@ -69,33 +69,62 @@ void kvm_riscv_vcpu_config_ran_once(struct kvm_vcpu *vcpu)
 		cfg->hedeleg &= ~BIT(EXC_BREAKPOINT);
 }
 
-void kvm_riscv_vcpu_config_load(struct kvm_vcpu *vcpu)
+void kvm_riscv_vcpu_config_load(struct kvm_vcpu *vcpu, bool nested_virt)
 {
+	struct kvm_vcpu_nested_csr *nsc = &vcpu->arch.nested.csr;
 	struct kvm_vcpu_config *cfg = &vcpu->arch.cfg;
+	unsigned long hedeleg, hideleg, tmp;
+	u64 henvcfg, hstateen0;
 	void *nsh;
+
+	if (nested_virt){
+		hedeleg = nsc->hedeleg;
+		hideleg = 0;
+		henvcfg = 0;
+		hstateen0 = 0;
+	} else {
+		hedeleg = cfg->hedeleg;
+		hideleg = cfg->hideleg;
+		henvcfg = cfg->henvcfg;
+		hstateen0 = cfg->hstateen0;
+	}
 
 	if (kvm_riscv_nacl_sync_csr_available()) {
 		nsh = nacl_shmem();
-		nacl_csr_write(nsh, CSR_HEDELEG, cfg->hedeleg);
-		nacl_csr_write(nsh, CSR_HIDELEG, cfg->hideleg);
-		nacl_csr_write(nsh, CSR_HENVCFG, cfg->henvcfg);
+		nacl_csr_write(nsh, CSR_HEDELEG, hedeleg);
+		nacl_csr_write(nsh, CSR_HIDELEG, hideleg);
+		nacl_csr_write(nsh, CSR_HENVCFG, henvcfg);
 		if (IS_ENABLED(CONFIG_32BIT))
-			nacl_csr_write(nsh, CSR_HENVCFGH, cfg->henvcfg >> 32);
+			nacl_csr_write(nsh, CSR_HENVCFGH, henvcfg >> 32);
 		if (riscv_has_extension_unlikely(RISCV_ISA_EXT_SMSTATEEN)) {
-			nacl_csr_write(nsh, CSR_HSTATEEN0, cfg->hstateen0);
+			nacl_csr_write(nsh, CSR_HSTATEEN0, hstateen0);
 			if (IS_ENABLED(CONFIG_32BIT))
-				nacl_csr_write(nsh, CSR_HSTATEEN0H, cfg->hstateen0 >> 32);
+				nacl_csr_write(nsh, CSR_HSTATEEN0H, hstateen0 >> 32);
+		}
+		if (kvm_riscv_aia_available()) {
+			tmp = nacl_csr_read(nsh, CSR_HVICTL);
+			if (nested_virt)
+				tmp |= HVICTL_VTI;
+			else
+				tmp &= ~HVICTL_VTI;
+			nacl_csr_write(nsh, CSR_HVICTL, tmp);
 		}
 	} else {
-		csr_write(CSR_HEDELEG, cfg->hedeleg);
-		csr_write(CSR_HIDELEG, cfg->hideleg);
-		csr_write(CSR_HENVCFG, cfg->henvcfg);
+		csr_write(CSR_HEDELEG, hedeleg);
+		csr_write(CSR_HIDELEG, hideleg);
+		csr_write(CSR_HENVCFG, henvcfg);
 		if (IS_ENABLED(CONFIG_32BIT))
-			csr_write(CSR_HENVCFGH, cfg->henvcfg >> 32);
+			csr_write(CSR_HENVCFGH, henvcfg >> 32);
 		if (riscv_has_extension_unlikely(RISCV_ISA_EXT_SMSTATEEN)) {
-			csr_write(CSR_HSTATEEN0, cfg->hstateen0);
+			csr_write(CSR_HSTATEEN0, hstateen0);
 			if (IS_ENABLED(CONFIG_32BIT))
-				csr_write(CSR_HSTATEEN0H, cfg->hstateen0 >> 32);
+				csr_write(CSR_HSTATEEN0H, hstateen0 >> 32);
+		}
+		if (kvm_riscv_aia_available()) {
+			if (nested_virt)
+				csr_set(CSR_HVICTL, HVICTL_VTI);
+			else
+				csr_clear(CSR_HVICTL, HVICTL_VTI);
 		}
 	}
 }

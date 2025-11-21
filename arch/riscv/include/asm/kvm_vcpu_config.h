@@ -20,6 +20,6 @@ struct kvm_vcpu_config {
 void kvm_riscv_vcpu_config_init(struct kvm_vcpu *vcpu);
 void kvm_riscv_vcpu_config_guest_debug(struct kvm_vcpu *vcpu);
 void kvm_riscv_vcpu_config_ran_once(struct kvm_vcpu *vcpu);
-void kvm_riscv_vcpu_config_load(struct kvm_vcpu *vcpu);
+void kvm_riscv_vcpu_config_load(struct kvm_vcpu *vcpu, bool nested_virt);
 
 #endif

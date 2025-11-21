@@ -578,7 +578,7 @@ void kvm_arch_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
 		csr_write(CSR_VSATP, csr->vsatp);
 	}
 
-	kvm_riscv_vcpu_config_load(vcpu);
+	kvm_riscv_vcpu_config_load(vcpu, kvm_riscv_vcpu_nested_virt(vcpu));
 
 	kvm_riscv_mmu_update_hgatp(vcpu, kvm_riscv_vcpu_nested_virt(vcpu));
 
