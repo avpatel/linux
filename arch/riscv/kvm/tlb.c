@@ -160,7 +160,7 @@ void kvm_riscv_local_hfence_vvma_all(unsigned long vmid)
 
 void kvm_riscv_local_tlb_sanitize(struct kvm_vcpu *vcpu)
 {
-	unsigned long vmid;
+	unsigned long vmid, nvmid;
 
 	if (!kvm_riscv_gstage_vmid_bits() ||
 	    vcpu->arch.last_exit_cpu == vcpu->cpu)
@@ -180,12 +180,19 @@ void kvm_riscv_local_tlb_sanitize(struct kvm_vcpu *vcpu)
 	vmid = READ_ONCE(vcpu->kvm->arch.vmid.vmid);
 	kvm_riscv_local_hfence_gvma_vmid_all(vmid);
 
+	nvmid = kvm_riscv_gstage_nested_vmid(vmid);
+	if (vmid != nvmid)
+		kvm_riscv_local_hfence_gvma_vmid_all(nvmid);
+
 	/*
 	 * Flush VS-stage TLB entries for implementation where VS-stage
 	 * TLB does not cahce guest physical address and VMID.
 	 */
-	if (static_branch_unlikely(&kvm_riscv_vsstage_tlb_no_gpa))
+	if (static_branch_unlikely(&kvm_riscv_vsstage_tlb_no_gpa)) {
 		kvm_riscv_local_hfence_vvma_all(vmid);
+		if (vmid != nvmid)
+			kvm_riscv_local_hfence_vvma_all(nvmid);
+	}
 }
 
 void kvm_riscv_fence_i_process(struct kvm_vcpu *vcpu)
