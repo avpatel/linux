@@ -67,6 +67,8 @@ void kvm_riscv_gstage_unmap_range(struct kvm_gstage *gstage,
 
 void kvm_riscv_gstage_wp_range(struct kvm_gstage *gstage, gpa_t start, gpa_t end);
 
+void kvm_riscv_gstage_update_hgatp(phys_addr_t pgd_phys, unsigned long vmid);
+
 void kvm_riscv_gstage_mode_detect(void);
 
 #endif

@@ -10,6 +10,7 @@
 #include <linux/module.h>
 #include <linux/pgtable.h>
 #include <asm/kvm_gstage.h>
+#include <asm/kvm_nacl.h>
 
 #ifdef CONFIG_64BIT
 unsigned long kvm_riscv_gstage_mode __ro_after_init = HGATP_MODE_SV39X4;
@@ -311,6 +312,19 @@ void kvm_riscv_gstage_wp_range(struct kvm_gstage *gstage, gpa_t start, gpa_t end
 next:
 		addr += page_size;
 	}
+}
+
+void kvm_riscv_gstage_update_hgatp(phys_addr_t pgd_phys, unsigned long vmid)
+{
+	unsigned long hgatp = kvm_riscv_gstage_mode << HGATP_MODE_SHIFT;
+
+	hgatp |= (vmid << HGATP_VMID_SHIFT) & HGATP_VMID;
+	hgatp |= (pgd_phys >> PAGE_SHIFT) & HGATP_PPN;
+
+	ncsr_write(CSR_HGATP, hgatp);
+
+	if (!kvm_riscv_gstage_vmid_bits())
+		kvm_riscv_local_hfence_gvma_all();
 }
 
 void __init kvm_riscv_gstage_mode_detect(void)
