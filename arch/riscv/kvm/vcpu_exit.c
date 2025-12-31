@@ -169,19 +169,24 @@ unsigned long kvm_riscv_vcpu_unpriv_read(struct kvm_vcpu *vcpu,
 }
 
 /**
- * kvm_riscv_vcpu_trap_redirect -- Redirect trap to Guest
+ * kvm_riscv_vcpu_trap_smode_redirect -- Redirect S-mode trap to Guest
  *
  * @vcpu: The VCPU pointer
  * @trap: Trap details
+ * @prev_priv: Previous privilege mode (true: S-mode, false: U-mode)
  */
-void kvm_riscv_vcpu_trap_redirect(struct kvm_vcpu *vcpu,
-				  struct kvm_cpu_trap *trap)
+void kvm_riscv_vcpu_trap_smode_redirect(struct kvm_vcpu *vcpu,
+					struct kvm_cpu_trap *trap,
+					bool prev_priv)
 {
 	unsigned long vsstatus = ncsr_read(CSR_VSSTATUS);
 
+	/* Local irqs must be disabled to ensure atomicity */
+	BUG_ON(!irqs_disabled());
+
 	/* Change Guest SSTATUS.SPP bit */
 	vsstatus &= ~SR_SPP;
-	if (vcpu->arch.guest_context.sstatus & SR_SPP)
+	if (prev_priv)
 		vsstatus |= SR_SPP;
 
 	/* Change Guest SSTATUS.SPIE bit */
@@ -212,6 +217,31 @@ void kvm_riscv_vcpu_trap_redirect(struct kvm_vcpu *vcpu,
 
 	/* Set Guest privilege mode to supervisor */
 	vcpu->arch.guest_context.sstatus |= SR_SPP;
+}
+
+/**
+ * kvm_riscv_vcpu_trap_redirect -- Redirect HS-mode trap to Guest
+ *
+ * @vcpu: The VCPU pointer
+ * @trap: Trap details
+ */
+void kvm_riscv_vcpu_trap_redirect(struct kvm_vcpu *vcpu,
+				  struct kvm_cpu_trap *trap)
+{
+	bool prev_priv = (vcpu->arch.guest_context.sstatus & SR_SPP) ? true : false;
+	unsigned long flags;
+
+	/* Disable local irqs */
+	local_irq_save(flags);
+
+	/* Update Guest nested state */
+	kvm_riscv_vcpu_nested_trap_redirect(vcpu, trap, prev_priv);
+
+	/* Update Guest supervisor state */
+	kvm_riscv_vcpu_trap_smode_redirect(vcpu, trap, prev_priv);
+
+	/* Enable local irqs */
+	local_irq_restore(flags);
 }
 
 static inline int vcpu_redirect(struct kvm_vcpu *vcpu, struct kvm_cpu_trap *trap)
