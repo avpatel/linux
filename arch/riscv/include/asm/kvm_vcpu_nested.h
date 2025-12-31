@@ -52,6 +52,8 @@ struct kvm_vcpu_nested {
 
 #define kvm_riscv_vcpu_nested_virt(__vcpu) ((__vcpu)->arch.nested.virt)
 
+int kvm_riscv_vcpu_nested_insn_sret(struct kvm_vcpu *vcpu, struct kvm_run *run, ulong insn);
+
 void kvm_riscv_vcpu_nested_csr_reset(struct kvm_vcpu *vcpu);
 int kvm_riscv_vcpu_nested_csr_init(struct kvm_vcpu *vcpu);
 void kvm_riscv_vcpu_nested_csr_deinit(struct kvm_vcpu *vcpu);
