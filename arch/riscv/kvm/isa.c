@@ -145,7 +145,7 @@ bool kvm_riscv_isa_enable_allowed(unsigned long ext)
 {
 	switch (ext) {
 	case KVM_RISCV_ISA_EXT_H:
-		return false;
+		return kvm_riscv_nested_available();
 	case KVM_RISCV_ISA_EXT_SSCOFPMF:
 		/* Sscofpmf depends on interrupt filtering defined in ssaia */
 		return !kvm_riscv_isa_check_host(SSAIA);

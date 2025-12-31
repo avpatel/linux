@@ -131,6 +131,8 @@ static int __init riscv_kvm_init(void)
 		return rc;
 	}
 
+	kvm_riscv_nested_init();
+
 	kvm_info("hypervisor extension available\n");
 
 	if (kvm_riscv_nacl_available()) {
@@ -171,6 +173,9 @@ static int __init riscv_kvm_init(void)
 	if (kvm_riscv_aia_available())
 		kvm_info("AIA available with %d guest external interrupts\n",
 			 kvm_riscv_aia_nr_hgei);
+
+	if (kvm_riscv_nested_available())
+		kvm_info("nested virtualization available\n");
 
 	kvm_riscv_setup_vendor_features();
 
