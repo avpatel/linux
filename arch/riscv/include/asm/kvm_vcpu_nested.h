@@ -64,6 +64,7 @@ void kvm_riscv_vcpu_nested_swtlb_process(struct kvm_vcpu *vcpu);
 void kvm_riscv_vcpu_nested_swtlb_request(struct kvm_vcpu *vcpu,
 					 const struct kvm_gstage_mapping *guest_map,
 					 const struct kvm_gstage_mapping *host_map);
+void kvm_riscv_vcpu_nested_swtlb_update_hgatp(struct kvm_vcpu *vcpu);
 void kvm_riscv_vcpu_nested_swtlb_reset(struct kvm_vcpu *vcpu);
 int kvm_riscv_vcpu_nested_swtlb_init(struct kvm_vcpu *vcpu);
 void kvm_riscv_vcpu_nested_swtlb_deinit(struct kvm_vcpu *vcpu);
