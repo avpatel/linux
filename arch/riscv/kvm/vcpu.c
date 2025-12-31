@@ -560,7 +560,7 @@ void kvm_arch_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
 	 * the read/write behaviour of certain CSRs change
 	 * based on VCPU config CSRs.
 	 */
-	kvm_riscv_vcpu_config_load(vcpu);
+	kvm_riscv_vcpu_config_load(vcpu, kvm_riscv_vcpu_nested_virt(vcpu));
 
 	if (kvm_riscv_nacl_sync_csr_available()) {
 		nsh = nacl_shmem();
