@@ -66,6 +66,19 @@ void kvm_riscv_vcpu_nested_swtlb_request(struct kvm_vcpu *vcpu,
 	kvm_make_request(KVM_REQ_NESTED_SWTLB, vcpu);
 }
 
+void kvm_riscv_vcpu_nested_swtlb_update_hgatp(struct kvm_vcpu *vcpu)
+{
+	struct kvm_vcpu_nested_swtlb *nst;
+	unsigned long vmid;
+
+	if (!kvm_riscv_nested_available())
+		return;
+
+	nst = vcpu->arch.nested.swtlb;
+	vmid = kvm_riscv_gstage_nested_vmid(READ_ONCE(vcpu->kvm->arch.vmid.vmid));
+	kvm_riscv_gstage_update_hgatp(nst->shadow_pgd_phys, nst->shadow_pgd_levels, vmid);
+}
+
 void kvm_riscv_vcpu_nested_swtlb_reset(struct kvm_vcpu *vcpu)
 {
 	struct kvm_vcpu_nested_swtlb *nst;

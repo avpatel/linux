@@ -14,7 +14,6 @@
 #include <linux/kvm_host.h>
 #include <linux/sched/signal.h>
 #include <asm/kvm_mmu.h>
-#include <asm/kvm_nacl.h>
 
 static bool __read_mostly eager_page_split = true;
 module_param(eager_page_split, bool, 0644);
@@ -802,17 +801,13 @@ void kvm_riscv_mmu_free_pgd(struct kvm *kvm)
 	kvm_mmu_free_memory_cache(&kvm->arch.pgd_split_page_cache);
 }
 
-void kvm_riscv_mmu_update_hgatp(struct kvm_vcpu *vcpu)
+void kvm_riscv_mmu_update_hgatp(struct kvm_vcpu *vcpu, bool nested_virt)
 {
 	struct kvm_arch *ka = &vcpu->kvm->arch;
-	unsigned long hgatp = kvm_riscv_gstage_mode(ka->pgd_levels)
-			      << HGATP_MODE_SHIFT;
 
-	hgatp |= (READ_ONCE(ka->vmid.vmid) << HGATP_VMID_SHIFT) & HGATP_VMID;
-	hgatp |= (ka->pgd_phys >> PAGE_SHIFT) & HGATP_PPN;
-
-	ncsr_write(CSR_HGATP, hgatp);
-
-	if (!kvm_riscv_gstage_vmid_bits())
-		kvm_riscv_local_hfence_gvma_all();
+	if (nested_virt)
+		kvm_riscv_vcpu_nested_swtlb_update_hgatp(vcpu);
+	else
+		kvm_riscv_gstage_update_hgatp(ka->pgd_phys, ka->pgd_levels,
+					      READ_ONCE(ka->vmid.vmid));
 }
