@@ -65,6 +65,48 @@ struct kvm_vcpu_nested {
 
 int kvm_riscv_vcpu_nested_insn_sret(struct kvm_vcpu *vcpu, struct kvm_run *run, ulong insn);
 
+int kvm_riscv_vcpu_nested_smode_csr_rmw(struct kvm_vcpu *vcpu, unsigned int csr_num,
+					unsigned long *val, unsigned long new_val,
+					unsigned long wr_mask);
+int kvm_riscv_vcpu_nested_hext_csr_rmw(struct kvm_vcpu *vcpu, unsigned int csr_num,
+				       unsigned long *val, unsigned long new_val,
+				       unsigned long wr_mask);
+
+#define KVM_RISCV_VCPU_NESTED_SMODE_CSR_FUNCS \
+{ .base = CSR_SIE,      .count = 1, .func = kvm_riscv_vcpu_nested_smode_csr_rmw }, \
+{ .base = CSR_SIEH,     .count = 1, .func = kvm_riscv_vcpu_nested_smode_csr_rmw }, \
+{ .base = CSR_SIP,      .count = 1, .func = kvm_riscv_vcpu_nested_smode_csr_rmw }, \
+{ .base = CSR_SIPH,     .count = 1, .func = kvm_riscv_vcpu_nested_smode_csr_rmw },
+
+#define KVM_RISCV_VCPU_NESTED_HEXT_CSR_FUNCS \
+{ .base = CSR_HSTATUS,  .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_HEDELEG,  .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_HIDELEG,  .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_HIE,      .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_HTIMEDELTA, .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_HCOUNTEREN, .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_HGEIE,    .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_HENVCFG,    .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_HTIMEDELTAH,    .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_HENVCFGH,    .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_HTVAL,    .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_HIP,      .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_HVIP,     .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_HTINST,    .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_HGATP,    .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_HGEIP,    .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_VSSTATUS,    .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_VSIE,    .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_VSTVEC,    .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_VSSCRATCH,    .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_VSEPC,    .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_VSCAUSE,    .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_VSTVAL,    .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_VSIP,    .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw }, \
+{ .base = CSR_VSATP,    .count = 1, .func = kvm_riscv_vcpu_nested_hext_csr_rmw },
+
+void kvm_riscv_vcpu_nested_csr_reset(struct kvm_vcpu *vcpu);
+
 int kvm_riscv_vcpu_nested_swtlb_xlate(struct kvm_vcpu *vcpu,
 				      const struct kvm_cpu_trap *trap,
 				      struct kvm_gstage_mapping *out_map,
