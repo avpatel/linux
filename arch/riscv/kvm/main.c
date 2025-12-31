@@ -131,6 +131,8 @@ static int __init riscv_kvm_init(void)
 		return rc;
 	}
 
+	kvm_riscv_nested_init();
+
 	kvm_info("hypervisor extension available\n");
 
 	if (kvm_riscv_nacl_available()) {
@@ -167,6 +169,9 @@ static int __init riscv_kvm_init(void)
 	kvm_info("highest G-stage page table mode is %s\n", str);
 
 	kvm_info("VMID %ld bits available\n", kvm_riscv_gstage_vmid_bits());
+
+	if (kvm_riscv_nested_available())
+		kvm_info("nested virtualization available\n");
 
 	kvm_riscv_setup_vendor_features();
 
