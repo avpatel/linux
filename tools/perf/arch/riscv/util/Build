@@ -1,1 +1,2 @@
 perf-util-y += header.o
+perf-util-y += auxtrace.o
