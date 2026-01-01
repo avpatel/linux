@@ -346,4 +346,7 @@ static inline int rvtrace_comp_poll_empty(struct rvtrace_component *comp)
 				comp->pdata->control_poll_timeout_usecs);
 }
 
+int rvtrace_perf_init(void);
+void rvtrace_perf_exit(void);
+
 #endif
