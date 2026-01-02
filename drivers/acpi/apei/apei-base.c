@@ -565,6 +565,48 @@ void apei_resources_release(struct apei_resources *resources)
 }
 EXPORT_SYMBOL_GPL(apei_resources_release);
 
+/**
+ * arch_apei_ffh_read() - Read FFH register
+ * @reg:	FFH encoded register information
+ * @val:	place holder for return value
+ * @access_bit_width: register width in bits
+ *
+ * Read value from a specified encoded address
+ *
+ * Return: 0 for success and error code
+ */
+int __weak arch_apei_ffh_read(u64 reg, u64 *val, u32 access_bit_width)
+{
+	return -ENOTSUPP;
+}
+
+/**
+ * arch_apei_ffh_write() - Write FFH register
+ * @reg:	FFH encoded register information
+ * @val:	value to write
+ * @access_bit_width: register width in bits
+ *
+ * Write value to a specified address.
+ *
+ * Return: 0 for success and error code
+ */
+int __weak arch_apei_ffh_write(u64 reg, u64 val, u32 access_bit_width)
+{
+	return -ENOTSUPP;
+}
+
+/**
+ * arch_apei_ffh_supported
+ *
+ * Return 0 if the FFH handling is upported by the platform.
+ * Platform/arch which support FFH must implement these weak
+ * functions.
+ */
+bool __weak arch_apei_ffh_supported(void)
+{
+	return false;
+}
+
 static int apei_check_gar(struct acpi_generic_address *reg, u64 *paddr,
 				u32 *access_bit_width)
 {
@@ -609,7 +651,8 @@ static int apei_check_gar(struct acpi_generic_address *reg, u64 *paddr,
 	}
 
 	if (space_id != ACPI_ADR_SPACE_SYSTEM_MEMORY &&
-	    space_id != ACPI_ADR_SPACE_SYSTEM_IO) {
+	    space_id != ACPI_ADR_SPACE_SYSTEM_IO &&
+	    space_id != ACPI_ADR_SPACE_FIXED_HARDWARE) {
 		pr_warn(FW_BUG APEI_PFX
 			"Invalid address space type in GAR [0x%llx/%u/%u/%u/%u]\n",
 			*paddr, bit_width, bit_offset, access_size_code,
@@ -630,8 +673,9 @@ int apei_map_generic_address(struct acpi_generic_address *reg)
 	if (rc)
 		return rc;
 
-	/* IO space doesn't need mapping */
-	if (reg->space_id == ACPI_ADR_SPACE_SYSTEM_IO)
+	/* FFH and IO space doesn't need mapping */
+	if (reg->space_id == ACPI_ADR_SPACE_SYSTEM_IO ||
+	    reg->space_id == ACPI_ADR_SPACE_FIXED_HARDWARE)
 		return 0;
 
 	if (!acpi_os_map_generic_address(reg))
@@ -667,6 +711,8 @@ int apei_read(u64 *val, struct acpi_generic_address *reg)
 		if (ACPI_FAILURE(status))
 			return -EIO;
 		break;
+	case ACPI_ADR_SPACE_FIXED_HARDWARE:
+		return arch_apei_ffh_read(address, val, access_bit_width);
 	default:
 		return -EINVAL;
 	}
@@ -699,6 +745,8 @@ int apei_write(u64 val, struct acpi_generic_address *reg)
 		if (ACPI_FAILURE(status))
 			return -EIO;
 		break;
+	case ACPI_ADR_SPACE_FIXED_HARDWARE:
+		return arch_apei_ffh_write(address, val, access_bit_width);
 	default:
 		return -EINVAL;
 	}
@@ -732,6 +780,11 @@ static int collect_res_callback(struct apei_exec_context *ctx,
 	case ACPI_ADR_SPACE_SYSTEM_IO:
 		return apei_res_add(&resources->ioport, paddr,
 				    access_bit_width / 8);
+	case ACPI_ADR_SPACE_FIXED_HARDWARE:
+		if (!arch_apei_ffh_supported())
+			return -ENOTSUPP;
+		else
+			return 0;
 	default:
 		return -EINVAL;
 	}
