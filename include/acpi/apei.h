@@ -34,8 +34,25 @@ static inline void acpi_ghes_init(void) { }
 #endif
 
 #ifdef CONFIG_ACPI_APEI
+int arch_apei_ffh_read(u64 reg, u64 *val, u32 access_bit_width);
+int arch_apei_ffh_write(u64 reg, u64 val, u32 access_bit_width);
+bool arch_apei_ffh_supported(void);
 void __init acpi_hest_init(void);
 #else
+static inline int arch_apei_ffh_read(u64 reg, u64 *val, u32 access_bit_width)
+{
+	return -ENOTSUPP;
+}
+
+static inline int arch_apei_ffh_write(u64 reg, u64 val, u32 access_bit_width)
+{
+	return -ENOTSUPP;
+}
+
+static inline bool arch_apei_ffh_supported(void)
+{
+	return false;
+}
 static inline void acpi_hest_init(void) { }
 #endif
 
