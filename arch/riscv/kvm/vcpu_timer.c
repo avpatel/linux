@@ -287,15 +287,26 @@ int kvm_riscv_vcpu_timer_reset(struct kvm_vcpu *vcpu)
 	return kvm_riscv_vcpu_timer_cancel(&vcpu->arch.timer);
 }
 
-static void kvm_riscv_vcpu_update_timedelta(struct kvm_vcpu *vcpu)
+void kvm_riscv_vcpu_update_timedelta(struct kvm_vcpu *vcpu, bool nested_virt)
 {
+	struct kvm_vcpu_nested_csr *nsc = &vcpu->arch.nested.csr;
 	struct kvm_guest_timer *gt = &vcpu->kvm->arch.timer;
+	u64 ndelta = 0;
+
+	if (nested_virt) {
+		ndelta = nsc->htimedelta;
+#if defined(CONFIG_32BIT)
+		ndelta |= ((u64)nsc->htimedeltah) << 32;
+#endif
+	}
+
+	ndelta += gt->time_delta;
 
 #if defined(CONFIG_32BIT)
-	ncsr_write(CSR_HTIMEDELTA, (u32)(gt->time_delta));
-	ncsr_write(CSR_HTIMEDELTAH, (u32)(gt->time_delta >> 32));
+	ncsr_write(CSR_HTIMEDELTA, (u32)ndelta);
+	ncsr_write(CSR_HTIMEDELTAH, (u32)(ndelta >> 32));
 #else
-	ncsr_write(CSR_HTIMEDELTA, gt->time_delta);
+	ncsr_write(CSR_HTIMEDELTA, ndelta);
 #endif
 }
 
@@ -303,7 +314,7 @@ void kvm_riscv_vcpu_timer_restore(struct kvm_vcpu *vcpu)
 {
 	struct kvm_vcpu_timer *t = &vcpu->arch.timer;
 
-	kvm_riscv_vcpu_update_timedelta(vcpu);
+	kvm_riscv_vcpu_update_timedelta(vcpu, kvm_riscv_vcpu_nested_virt(vcpu));
 
 	if (!t->sstc_enabled)
 		return;
