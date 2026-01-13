@@ -219,6 +219,8 @@ static int kvm_riscv_vcpu_get_reg_core(struct kvm_vcpu *vcpu,
 	else if (reg_num == KVM_REG_RISCV_CORE_REG(mode))
 		reg_val = (cntx->sstatus & SR_SPP) ?
 				KVM_RISCV_MODE_S : KVM_RISCV_MODE_U;
+	else if (reg_num == KVM_REG_RISCV_CORE_REG(virt))
+		reg_val = kvm_riscv_vcpu_nested_virt(vcpu);
 	else
 		return -ENOENT;
 
@@ -257,6 +259,9 @@ static int kvm_riscv_vcpu_set_reg_core(struct kvm_vcpu *vcpu,
 			cntx->sstatus |= SR_SPP;
 		else
 			cntx->sstatus &= ~SR_SPP;
+	} else if (reg_num == KVM_REG_RISCV_CORE_REG(virt)) {
+		if (riscv_isa_extension_available(vcpu->arch.isa, h))
+			kvm_riscv_vcpu_nested_virt(vcpu) = !!reg_val;
 	} else
 		return -ENOENT;
 
