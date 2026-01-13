@@ -65,6 +65,7 @@ struct kvm_riscv_config {
 struct kvm_riscv_core {
 	struct user_regs_struct regs;
 	unsigned long mode;
+	unsigned long virt;
 };
 
 /* Possible privilege modes for kvm_riscv_core */
