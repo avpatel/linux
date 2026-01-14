@@ -359,3 +359,31 @@ void kvm_riscv_vcpu_nested_csr_reset(struct kvm_vcpu *vcpu)
 
 	memset(nsc, 0, sizeof(*nsc));
 }
+
+int kvm_riscv_vcpu_nested_set_csr(struct kvm_vcpu *vcpu, unsigned long reg_num,
+				  unsigned long reg_val)
+{
+	struct kvm_vcpu_nested_csr *nsc = &vcpu->arch.nested.csr;
+
+	if (!riscv_isa_extension_available(vcpu->arch.isa, h))
+		return -ENOENT;
+	if (reg_num >= sizeof(struct kvm_riscv_hext_csr) / sizeof(unsigned long))
+		return -ENOENT;
+
+	((unsigned long *)nsc)[reg_num] = reg_val;
+	return 0;
+}
+
+int kvm_riscv_vcpu_nested_get_csr(struct kvm_vcpu *vcpu, unsigned long reg_num,
+				  unsigned long *out_val)
+{
+	struct kvm_vcpu_nested_csr *nsc = &vcpu->arch.nested.csr;
+
+	if (!riscv_isa_extension_available(vcpu->arch.isa, h))
+		return -ENOENT;
+	if (reg_num >= sizeof(struct kvm_riscv_hext_csr) / sizeof(unsigned long))
+		return -ENOENT;
+
+	*out_val = ((unsigned long *)nsc)[reg_num];
+	return 0;
+}
