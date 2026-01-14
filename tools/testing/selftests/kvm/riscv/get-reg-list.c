@@ -327,6 +327,8 @@ static const char *core_id_to_str(const char *prefix, __u64 id)
 	"KVM_REG_RISCV_CSR_AIA | KVM_REG_RISCV_CSR_REG(" #csr ")"
 #define RISCV_CSR_SMSTATEEN(csr) \
 	"KVM_REG_RISCV_CSR_SMSTATEEN | KVM_REG_RISCV_CSR_REG(" #csr ")"
+#define RISCV_CSR_HEXT(csr) \
+	"KVM_REG_RISCV_CSR_HEXT | KVM_REG_RISCV_CSR_REG(" #csr ")"
 
 static const char *general_csr_id_to_str(__u64 reg_off)
 {
@@ -394,6 +396,56 @@ static const char *smstateen_csr_id_to_str(__u64 reg_off)
 	return NULL;
 }
 
+static const char *hext_csr_id_to_str(__u64 reg_off)
+{
+	/* reg_off is the offset into struct kvm_riscv_hext_csr */
+	switch (reg_off) {
+	case KVM_REG_RISCV_CSR_HEXT_REG(hstatus):
+		return RISCV_CSR_HEXT(hstatus);
+	case KVM_REG_RISCV_CSR_HEXT_REG(hedeleg):
+		return RISCV_CSR_HEXT(hedeleg);
+	case KVM_REG_RISCV_CSR_HEXT_REG(hideleg):
+		return RISCV_CSR_HEXT(hideleg);
+	case KVM_REG_RISCV_CSR_HEXT_REG(hvip):
+		return RISCV_CSR_HEXT(hvip);
+	case KVM_REG_RISCV_CSR_HEXT_REG(hcounteren):
+		return RISCV_CSR_HEXT(hcounteren);
+	case KVM_REG_RISCV_CSR_HEXT_REG(htimedelta):
+		return RISCV_CSR_HEXT(htimedelta);
+	case KVM_REG_RISCV_CSR_HEXT_REG(htimedeltah):
+		return RISCV_CSR_HEXT(htimedeltah);
+	case KVM_REG_RISCV_CSR_HEXT_REG(htval):
+		return RISCV_CSR_HEXT(htval);
+	case KVM_REG_RISCV_CSR_HEXT_REG(htinst):
+		return RISCV_CSR_HEXT(htinst);
+	case KVM_REG_RISCV_CSR_HEXT_REG(henvcfg):
+		return RISCV_CSR_HEXT(henvcfg);
+	case KVM_REG_RISCV_CSR_HEXT_REG(henvcfgh):
+		return RISCV_CSR_HEXT(henvcfgh);
+	case KVM_REG_RISCV_CSR_HEXT_REG(hgatp):
+		return RISCV_CSR_HEXT(hgatp);
+	case KVM_REG_RISCV_CSR_HEXT_REG(vsstatus):
+		return RISCV_CSR_HEXT(vsstatus);
+	case KVM_REG_RISCV_CSR_HEXT_REG(vsie):
+		return RISCV_CSR_HEXT(vsie);
+	case KVM_REG_RISCV_CSR_HEXT_REG(vstvec):
+		return RISCV_CSR_HEXT(vstvec);
+	case KVM_REG_RISCV_CSR_HEXT_REG(vsscratch):
+		return RISCV_CSR_HEXT(vsscratch);
+	case KVM_REG_RISCV_CSR_HEXT_REG(vsepc):
+		return RISCV_CSR_HEXT(vsepc);
+	case KVM_REG_RISCV_CSR_HEXT_REG(vscause):
+		return RISCV_CSR_HEXT(vscause);
+	case KVM_REG_RISCV_CSR_HEXT_REG(vstval):
+		return RISCV_CSR_HEXT(vstval);
+	case KVM_REG_RISCV_CSR_HEXT_REG(vsatp):
+		return RISCV_CSR_HEXT(vsatp);
+	}
+
+	TEST_FAIL("Unknown h-extension csr reg: 0x%llx", reg_off);
+	return NULL;
+}
+
 static const char *csr_id_to_str(const char *prefix, __u64 id)
 {
 	__u64 reg_off = id & ~(REG_MASK | KVM_REG_RISCV_CSR);
@@ -410,6 +462,8 @@ static const char *csr_id_to_str(const char *prefix, __u64 id)
 		return aia_csr_id_to_str(reg_off);
 	case KVM_REG_RISCV_CSR_SMSTATEEN:
 		return smstateen_csr_id_to_str(reg_off);
+	case KVM_REG_RISCV_CSR_HEXT:
+		return hext_csr_id_to_str(reg_off);
 	}
 
 	return strdup_printf("%lld | %lld /* UNKNOWN */", reg_subtype, reg_off);
@@ -941,6 +995,51 @@ static __u64 smstateen_regs[] = {
 	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_ISA_EXT | KVM_REG_RISCV_ISA_SINGLE | KVM_RISCV_ISA_EXT_SMSTATEEN,
 };
 
+static __u64 h_regs[] = {
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(hstatus),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(hedeleg),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(hideleg),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(hvip),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(hcounteren),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(htimedelta),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(htimedeltah),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(htval),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(htinst),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(henvcfg),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(henvcfgh),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(hgatp),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(vsstatus),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(vsie),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(vstvec),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(vsscratch),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(vsepc),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(vscause),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(vstval),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_CSR | KVM_REG_RISCV_CSR_HEXT |
+	KVM_REG_RISCV_CSR_HEXT_REG(vsatp),
+	KVM_REG_RISCV | KVM_REG_SIZE_ULONG | KVM_REG_RISCV_ISA_EXT | KVM_REG_RISCV_ISA_SINGLE |
+	KVM_RISCV_ISA_EXT_H,
+};
+
 static __u64 fp_f_regs[] = {
 	KVM_REG_RISCV | KVM_REG_SIZE_U32 | KVM_REG_RISCV_FP_F | KVM_REG_RISCV_FP_F_REG(f[0]),
 	KVM_REG_RISCV | KVM_REG_SIZE_U32 | KVM_REG_RISCV_FP_F | KVM_REG_RISCV_FP_F_REG(f[1]),
@@ -1079,6 +1178,8 @@ static __u64 vector_regs[] = {
 	{"aia", .feature = KVM_RISCV_ISA_EXT_SSAIA, .regs = aia_regs, .regs_n = ARRAY_SIZE(aia_regs),}
 #define SUBLIST_SMSTATEEN \
 	{"smstateen", .feature = KVM_RISCV_ISA_EXT_SMSTATEEN, .regs = smstateen_regs, .regs_n = ARRAY_SIZE(smstateen_regs),}
+#define SUBLIST_H \
+	{"h", .feature = KVM_RISCV_ISA_EXT_H, .regs = h_regs, .regs_n = ARRAY_SIZE(h_regs),}
 #define SUBLIST_FP_F \
 	{"fp_f", .feature = KVM_RISCV_ISA_EXT_F, .regs = fp_f_regs, \
 		.regs_n = ARRAY_SIZE(fp_f_regs),}
@@ -1160,7 +1261,7 @@ KVM_ISA_EXT_SUBLIST_CONFIG(aia, AIA);
 KVM_ISA_EXT_SUBLIST_CONFIG(fp_f, FP_F);
 KVM_ISA_EXT_SUBLIST_CONFIG(fp_d, FP_D);
 KVM_ISA_EXT_SUBLIST_CONFIG(v, V);
-KVM_ISA_EXT_SIMPLE_CONFIG(h, H);
+KVM_ISA_EXT_SUBLIST_CONFIG(h, H);
 KVM_ISA_EXT_SIMPLE_CONFIG(smnpm, SMNPM);
 KVM_ISA_EXT_SUBLIST_CONFIG(smstateen, SMSTATEEN);
 KVM_ISA_EXT_SIMPLE_CONFIG(sscofpmf, SSCOFPMF);
