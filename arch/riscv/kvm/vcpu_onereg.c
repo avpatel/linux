@@ -417,6 +417,9 @@ static int kvm_riscv_vcpu_get_reg_csr(struct kvm_vcpu *vcpu,
 	case KVM_REG_RISCV_CSR_ZICFISS:
 		rc = kvm_riscv_vcpu_zicfiss_get_csr(vcpu, reg_num, &reg_val);
 		break;
+	case KVM_REG_RISCV_CSR_HEXT:
+		rc = kvm_riscv_vcpu_nested_get_csr(vcpu, reg_num, &reg_val);
+		break;
 	default:
 		rc = -ENOENT;
 		break;
@@ -461,6 +464,9 @@ static int kvm_riscv_vcpu_set_reg_csr(struct kvm_vcpu *vcpu,
 		break;
 	case KVM_REG_RISCV_CSR_ZICFISS:
 		rc = kvm_riscv_vcpu_zicfiss_set_csr(vcpu, reg_num, reg_val);
+		break;
+	case KVM_REG_RISCV_CSR_HEXT:
+		rc = kvm_riscv_vcpu_nested_set_csr(vcpu, reg_num, reg_val);
 		break;
 	default:
 		rc = -ENOENT;
@@ -707,6 +713,8 @@ static inline unsigned long num_csr_regs(const struct kvm_vcpu *vcpu)
 		n += sizeof(struct kvm_riscv_smstateen_csr) / sizeof(unsigned long);
 	if (riscv_isa_extension_available(vcpu->arch.isa, ZICFISS))
 		n += sizeof(struct kvm_riscv_zicfiss_csr) / sizeof(unsigned long);
+	if (riscv_isa_extension_available(vcpu->arch.isa, H))
+		n += sizeof(struct kvm_riscv_hext_csr) / sizeof(unsigned long);
 
 	return n;
 }
@@ -715,7 +723,7 @@ static int copy_csr_reg_indices(const struct kvm_vcpu *vcpu,
 				u64 __user *uindices)
 {
 	int n1 = sizeof(struct kvm_riscv_csr) / sizeof(unsigned long);
-	int n2 = 0, n3 = 0, n4 = 0;
+	int n2 = 0, n3 = 0, n4 = 0, n5 = 0;
 
 	/* copy general csr regs */
 	for (int i = 0; i < n1; i++) {
@@ -785,7 +793,25 @@ static int copy_csr_reg_indices(const struct kvm_vcpu *vcpu,
 		}
 	}
 
-	return n1 + n2 + n3 + n4;
+	/* copy H-extension csr regs */
+	if (riscv_isa_extension_available(vcpu->arch.isa, H)) {
+		n5 = sizeof(struct kvm_riscv_hext_csr) / sizeof(unsigned long);
+
+		for (int i = 0; i < n5; i++) {
+			u64 size = IS_ENABLED(CONFIG_32BIT) ?
+				   KVM_REG_SIZE_U32 : KVM_REG_SIZE_U64;
+			u64 reg = KVM_REG_RISCV | size | KVM_REG_RISCV_CSR |
+					  KVM_REG_RISCV_CSR_HEXT | i;
+
+			if (uindices) {
+				if (put_user(reg, uindices))
+					return -EFAULT;
+				uindices++;
+			}
+		}
+	}
+
+	return n1 + n2 + n3 + n4 + n5;
 }
 
 static inline unsigned long num_timer_regs(void)

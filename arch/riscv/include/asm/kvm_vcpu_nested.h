@@ -102,6 +102,11 @@ void kvm_riscv_vcpu_nested_csr_reset(struct kvm_vcpu *vcpu);
 int kvm_riscv_vcpu_nested_csr_init(struct kvm_vcpu *vcpu);
 void kvm_riscv_vcpu_nested_csr_deinit(struct kvm_vcpu *vcpu);
 
+int kvm_riscv_vcpu_nested_set_csr(struct kvm_vcpu *vcpu, unsigned long reg_num,
+				  unsigned long reg_val);
+int kvm_riscv_vcpu_nested_get_csr(struct kvm_vcpu *vcpu, unsigned long reg_num,
+				  unsigned long *out_val);
+
 int kvm_riscv_vcpu_nested_swtlb_xlate(struct kvm_vcpu *vcpu,
 				      const struct kvm_cpu_trap *trap,
 				      struct kvm_gstage_mapping *out_map,
