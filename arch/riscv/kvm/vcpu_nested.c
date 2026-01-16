@@ -172,6 +172,55 @@ void kvm_riscv_vcpu_nested_trap_redirect(struct kvm_vcpu *vcpu,
 				       false, prev_priv, gva);
 }
 
+void kvm_riscv_vcpu_nested_vsirq_process(struct kvm_vcpu *vcpu)
+{
+	struct kvm_vcpu_nested *ns = &vcpu->arch.nested;
+	struct kvm_vcpu_nested_csr *nsc = &ns->csr;
+	struct kvm_cpu_trap trap;
+	unsigned long irqs;
+	bool next_spp;
+	int vsirq;
+
+	/* Do nothing if nested virtualization is OFF */
+	if (!ns->virt)
+		return;
+
+	/* Determine the virtual-VS mode interrupt number */
+	vsirq = 0;
+	irqs = nsc->hvip;
+	irqs &= nsc->vsie << VSIP_TO_HVIP_SHIFT;
+	irqs &= nsc->hideleg;
+	if (irqs & BIT(IRQ_VS_EXT))
+		vsirq = IRQ_S_EXT;
+	else if (irqs & BIT(IRQ_VS_TIMER))
+		vsirq = IRQ_S_TIMER;
+	else if (irqs & BIT(IRQ_VS_SOFT))
+		vsirq = IRQ_S_SOFT;
+	if (vsirq <= 0)
+		return;
+
+	/*
+	 * Determine whether we are resuming in virtual-VS mode
+	 * or virtual-VU mode.
+	 */
+	next_spp = !!(vcpu->arch.guest_context.sstatus & SR_SPP);
+
+	/*
+	 * If we are going to virtual-VS mode and interrupts are
+	 * disabled then do nothing.
+	 */
+	if (next_spp && !(ncsr_read(CSR_VSSTATUS) & SR_SIE))
+		return;
+
+	/* Take virtual-VS mode interrupt */
+	trap.scause = CAUSE_IRQ_FLAG | vsirq;
+	trap.sepc = vcpu->arch.guest_context.sepc;
+	trap.stval = 0;
+	trap.htval = 0;
+	trap.htinst = 0;
+	kvm_riscv_vcpu_trap_smode_redirect(vcpu, &trap, next_spp);
+}
+
 void kvm_riscv_vcpu_nested_reset(struct kvm_vcpu *vcpu)
 {
 	struct kvm_vcpu_nested *ns = &vcpu->arch.nested;

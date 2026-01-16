@@ -86,6 +86,7 @@ void kvm_riscv_vcpu_nested_set_virt(struct kvm_vcpu *vcpu,
 void kvm_riscv_vcpu_nested_trap_redirect(struct kvm_vcpu *vcpu,
 					 struct kvm_cpu_trap *trap,
 					 bool prev_priv);
+void kvm_riscv_vcpu_nested_vsirq_process(struct kvm_vcpu *vcpu);
 
 void kvm_riscv_vcpu_nested_reset(struct kvm_vcpu *vcpu);
 int kvm_riscv_vcpu_nested_init(struct kvm_vcpu *vcpu);
