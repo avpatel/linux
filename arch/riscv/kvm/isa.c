@@ -11,11 +11,18 @@
 #include <asm/kvm_isa.h>
 #include <asm/vector.h>
 
-#define KVM_ISA_EXT_ARR(ext)		\
-[KVM_RISCV_ISA_EXT_##ext] = RISCV_ISA_EXT_##ext
+struct kvm_isa_ext {
+	unsigned long ext;
+	bool nested;
+};
+
+#define KVM_ISA_EXT_ARR2(ext, nested)		\
+[KVM_RISCV_ISA_EXT_##ext] = { RISCV_ISA_EXT_##ext, nested }
+
+#define KVM_ISA_EXT_ARR(ext)			KVM_ISA_EXT_ARR2(ext, true)
 
 /* Mapping between KVM ISA Extension ID & guest ISA extension ID */
-static const unsigned long kvm_isa_ext_arr[] = {
+static const struct kvm_isa_ext kvm_isa_ext_arr[] = {
 	/* Single letter extensions (alphabetically sorted) */
 	KVM_ISA_EXT_ARR(A),
 	KVM_ISA_EXT_ARR(C),
@@ -26,24 +33,24 @@ static const unsigned long kvm_isa_ext_arr[] = {
 	KVM_ISA_EXT_ARR(M),
 	KVM_ISA_EXT_ARR(V),
 	/* Multi letter extensions (alphabetically sorted) */
-	KVM_ISA_EXT_ARR(SMNPM),
-	KVM_ISA_EXT_ARR(SMSTATEEN),
-	KVM_ISA_EXT_ARR(SSAIA),
-	KVM_ISA_EXT_ARR(SSCOFPMF),
-	KVM_ISA_EXT_ARR(SSNPM),
-	KVM_ISA_EXT_ARR(SSTC),
+	KVM_ISA_EXT_ARR2(SMNPM, false),
+	KVM_ISA_EXT_ARR2(SMSTATEEN, false),
+	KVM_ISA_EXT_ARR2(SSAIA, false),
+	KVM_ISA_EXT_ARR2(SSCOFPMF, false),
+	KVM_ISA_EXT_ARR2(SSNPM, false),
+	KVM_ISA_EXT_ARR2(SSTC, false),
 	KVM_ISA_EXT_ARR(SVADE),
 	KVM_ISA_EXT_ARR(SVADU),
-	KVM_ISA_EXT_ARR(SVINVAL),
-	KVM_ISA_EXT_ARR(SVNAPOT),
-	KVM_ISA_EXT_ARR(SVPBMT),
+	KVM_ISA_EXT_ARR2(SVINVAL, false),
+	KVM_ISA_EXT_ARR2(SVNAPOT, false),
+	KVM_ISA_EXT_ARR2(SVPBMT, false),
 	KVM_ISA_EXT_ARR(SVVPTC),
 	KVM_ISA_EXT_ARR(ZAAMO),
 	KVM_ISA_EXT_ARR(ZABHA),
 	KVM_ISA_EXT_ARR(ZACAS),
 	KVM_ISA_EXT_ARR(ZALASR),
 	KVM_ISA_EXT_ARR(ZALRSC),
-	KVM_ISA_EXT_ARR(ZAWRS),
+	KVM_ISA_EXT_ARR2(ZAWRS, false),
 	KVM_ISA_EXT_ARR(ZBA),
 	KVM_ISA_EXT_ARR(ZBB),
 	KVM_ISA_EXT_ARR(ZBC),
@@ -61,12 +68,12 @@ static const unsigned long kvm_isa_ext_arr[] = {
 	KVM_ISA_EXT_ARR(ZFBFMIN),
 	KVM_ISA_EXT_ARR(ZFH),
 	KVM_ISA_EXT_ARR(ZFHMIN),
-	KVM_ISA_EXT_ARR(ZICBOM),
-	KVM_ISA_EXT_ARR(ZICBOP),
-	KVM_ISA_EXT_ARR(ZICBOZ),
+	KVM_ISA_EXT_ARR2(ZICBOM, false),
+	KVM_ISA_EXT_ARR2(ZICBOP, false),
+	KVM_ISA_EXT_ARR2(ZICBOZ, false),
 	KVM_ISA_EXT_ARR(ZICCRSE),
-	KVM_ISA_EXT_ARR(ZICFILP),
-	KVM_ISA_EXT_ARR(ZICFISS),
+	KVM_ISA_EXT_ARR2(ZICFILP, false),
+	KVM_ISA_EXT_ARR2(ZICFISS, false),
 	KVM_ISA_EXT_ARR(ZICNTR),
 	KVM_ISA_EXT_ARR(ZICOND),
 	KVM_ISA_EXT_ARR(ZICSR),
@@ -105,7 +112,7 @@ unsigned long kvm_riscv_base2isa_ext(unsigned long base_ext)
 	unsigned long i;
 
 	for (i = 0; i < KVM_RISCV_ISA_EXT_MAX; i++) {
-		if (kvm_isa_ext_arr[i] == base_ext)
+		if (kvm_isa_ext_arr[i].ext == base_ext)
 			return i;
 	}
 
@@ -121,7 +128,10 @@ int __kvm_riscv_isa_check_host(unsigned long kvm_ext, unsigned long *base_ext)
 		return -ENOENT;
 
 	kvm_ext = array_index_nospec(kvm_ext, ARRAY_SIZE(kvm_isa_ext_arr));
-	switch (kvm_isa_ext_arr[kvm_ext]) {
+	if (kvm_riscv_nested_available() && !kvm_isa_ext_arr[kvm_ext].nested)
+		return -ENOENT;
+
+	switch (kvm_isa_ext_arr[kvm_ext].ext) {
 	case RISCV_ISA_EXT_SMNPM:
 		/*
 		 * Pointer masking effective in (H)S-mode is provided by the
@@ -132,7 +142,7 @@ int __kvm_riscv_isa_check_host(unsigned long kvm_ext, unsigned long *base_ext)
 		host_ext = RISCV_ISA_EXT_SSNPM;
 		break;
 	default:
-		host_ext = kvm_isa_ext_arr[kvm_ext];
+		host_ext = kvm_isa_ext_arr[kvm_ext].ext;
 		break;
 	}
 
@@ -140,7 +150,7 @@ int __kvm_riscv_isa_check_host(unsigned long kvm_ext, unsigned long *base_ext)
 		return -ENOENT;
 
 	if (base_ext)
-		*base_ext = kvm_isa_ext_arr[kvm_ext];
+		*base_ext = kvm_isa_ext_arr[kvm_ext].ext;
 
 	return 0;
 }
