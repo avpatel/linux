@@ -1228,7 +1228,9 @@ of_fwnode_graph_get_port_parent(struct fwnode_handle *fwnode)
 		return NULL;
 
 	/* Is this the "ports" node? If not, it's the port parent. */
-	if (!of_node_name_eq(np, "ports"))
+	if (!of_node_name_eq(np, "ports") &&
+	    !of_node_name_eq(np, "in-ports") &&
+	    !of_node_name_eq(np, "out-ports"))
 		return of_fwnode_handle(np);
 
 	return of_fwnode_handle(of_get_next_parent(np));
