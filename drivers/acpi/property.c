@@ -1422,8 +1422,25 @@ static struct fwnode_handle *
 acpi_node_get_parent(const struct fwnode_handle *fwnode)
 {
 	if (is_acpi_data_node(fwnode)) {
-		/* All data nodes have parent pointer so just return that */
-		return to_acpi_data_node(fwnode)->parent;
+		const struct acpi_data_node *ep;
+		const struct acpi_data_node *ep_parent;
+
+		ep = to_acpi_data_node(fwnode);
+		ep_parent = to_acpi_data_node(ep->parent);
+
+		if (!ep_parent)
+			return NULL;
+
+		/*
+		 * Is this one of "ports", "in-ports" or "out-ports" node?
+		 * If not, it's the parent. otherwise, get its parent.
+		 */
+		if (!strncmp(ep_parent->name, "ports", strlen("ports")) ||
+		    !strncmp(ep_parent->name, "in-ports", strlen("in-ports")) ||
+		    !strncmp(ep_parent->name, "out-ports", strlen("out-ports")))
+			return  ep_parent->parent;
+		else
+			return ep->parent;
 	}
 	if (is_acpi_device_node(fwnode)) {
 		struct acpi_device *parent;
