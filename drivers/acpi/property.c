@@ -1422,7 +1422,7 @@ static struct fwnode_handle *
 acpi_node_get_parent(const struct fwnode_handle *fwnode)
 {
 	if (is_acpi_data_node(fwnode)) {
-		/* All data nodes have parent pointer so just return that */
+		/* Keep the structural parent for generic fwnode iteration. */
 		return to_acpi_data_node(fwnode)->parent;
 	}
 	if (is_acpi_device_node(fwnode)) {
@@ -1703,7 +1703,19 @@ acpi_fwnode_get_name_prefix(const struct fwnode_handle *fwnode)
 static struct fwnode_handle *
 acpi_fwnode_get_parent(struct fwnode_handle *fwnode)
 {
-	return acpi_node_get_parent(fwnode);
+	struct fwnode_handle *parent;
+	const char *name;
+
+	parent = acpi_node_get_parent(fwnode);
+	if (!is_acpi_data_node(parent))
+		return parent;
+
+	name = to_acpi_data_node(parent)->name;
+	if (!strcmp(name, "ports") || !strcmp(name, "in-ports") ||
+	    !strcmp(name, "out-ports"))
+		return acpi_node_get_parent(parent);
+
+	return parent;
 }
 
 static int acpi_fwnode_graph_parse_endpoint(const struct fwnode_handle *fwnode,
