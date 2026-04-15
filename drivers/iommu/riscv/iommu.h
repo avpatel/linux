@@ -38,6 +38,9 @@ struct riscv_iommu_domain {
 	struct riscv_iommu_msipte *msi_root;
 	u64 msi_addr_mask;
 	u64 msi_addr_pattern;
+	u32 group_index_bits;
+	u32 group_index_shift;
+	size_t imsic_stride;
 };
 PT_IOMMU_CHECK_DOMAIN(struct riscv_iommu_domain, riscvpt.iommu, domain);
 
