@@ -1438,11 +1438,33 @@ static struct iommu_domain *riscv_iommu_alloc_paging_domain(struct device *dev)
 
 static void riscv_iommu_get_resv_regions(struct device *dev, struct list_head *head)
 {
+	struct riscv_iommu_device *iommu = dev_to_iommu(dev);
 	const struct imsic_global_config *imsic_global;
+	enum iommu_resv_type type;
+	int prot;
 	size_t size, i;
 
 	if (!imsic_enabled())
 		return;
+
+	/*
+	 * When MSI_FLAT is supported, the s-stage IMSIC identity mappings
+	 * are managed dynamically by the IR driver for both the host and
+	 * guest uses - so we don't instruct the IOMMU subsystem to do the
+	 * mapping here. We still need to reserve the host IMSIC addresses
+	 * for the host use, though.
+	 *
+	 * When MSI_FLAT is not supported, there won't be any IR management
+	 * and the device will always write to the host physical IMSIC
+	 * addresses, so identity mappings are installed directly.
+	 */
+	if (iommu->caps & RISCV_IOMMU_CAPABILITIES_MSI_FLAT) {
+		type = IOMMU_RESV_RESERVED;
+		prot = 0;
+	} else {
+		type = IOMMU_RESV_DIRECT;
+		prot = IOMMU_WRITE | IOMMU_NOEXEC | IOMMU_MMIO;
+	}
 
 	imsic_global = imsic_get_global_config();
 	size = BIT(imsic_global->hart_index_bits + imsic_global->guest_index_bits + 12);
@@ -1452,12 +1474,7 @@ static void riscv_iommu_get_resv_regions(struct device *dev, struct list_head *h
 		phys_addr_t addr;
 
 		addr = imsic_global->base_addr | (i << imsic_global->group_index_shift);
-		/*
-		 * The device always writes to the host physical IMSIC address,
-		 * so install identity mappings directly.
-		 */
-		reg = iommu_alloc_resv_region(addr, size, IOMMU_WRITE | IOMMU_NOEXEC | IOMMU_MMIO,
-					      IOMMU_RESV_DIRECT, GFP_KERNEL);
+		reg = iommu_alloc_resv_region(addr, size, prot, type, GFP_KERNEL);
 		if (reg)
 			list_add_tail(&reg->list, head);
 	}
