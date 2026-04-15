@@ -23,6 +23,7 @@
 #include <linux/irqdomain.h>
 #include <linux/kernel.h>
 #include <linux/pci.h>
+#include <linux/sizes.h>
 #include "../iommu-pages.h"
 #include "iommu-bits.h"
 #include "iommu.h"
@@ -38,6 +39,10 @@
 /* IOMMU PSCID allocation namespace. */
 static DEFINE_IDA(riscv_iommu_pscids);
 #define RISCV_IOMMU_MAX_PSCID		(BIT(20) - 1)
+
+/* IOMMU GSCID allocation namespace. */
+static DEFINE_IDA(riscv_iommu_gscids);
+#define RISCV_IOMMU_MAX_GSCID		(BIT(16) - 1)
 
 /* Device resource-managed allocations */
 struct riscv_iommu_devres {
@@ -1207,6 +1212,73 @@ static void riscv_iommu_iotlb_sync(struct iommu_domain *iommu_domain,
 	iommu_put_pages_list(&gather->freelist);
 }
 
+static int riscv_iommu_gstage_alloc(struct riscv_iommu_device *iommu,
+				    struct riscv_iommu_domain *domain)
+{
+	struct pt_iommu_riscv_64_cfg cfg = {};
+
+	if (domain->gstage_riscvpt.iommu.ops)
+		return 0;
+
+	/*
+	 * The g-stage maps host physical addresses as identity mappings
+	 * (paddr -> paddr). The input to the g-stage is the s-stage output
+	 * address (a host physical address). PT_FEAT_SIGN_EXTEND must not be
+	 * set: physical addresses are unsigned, and sign extension would
+	 * reject addresses in the upper half of the hw_max_vasz_lg2 range
+	 * (e.g. [2^38, 2^39) for Sv39x4). Without sign extension,
+	 * hw_max_vasz_lg2 gives an unsigned range [0, 2^hw_max_vasz_lg2).
+	 * The s-stage hw_max_oasz_lg2 is capped to hw_max_vasz_lg2 when
+	 * MSI_FLAT is active (see riscv_iommu_alloc_paging_domain()), so
+	 * every s-stage output address is guaranteed to fit. This limits
+	 * DMA to physical addresses below 2^hw_max_vasz_lg2 (512 GB for
+	 * Sv39x4, 256 TB for Sv48x4). Supporting the full 41-bit (Sv39x4)
+	 * or 50-bit (Sv48x4) GPA range would require implementing the SV*x4
+	 * wider root page table (2048 entries); that is left for future work.
+	 *
+	 * The iohgatp MODE values (SV39X4=8, SV48X4=9, SV57X4=10) are
+	 * numerically identical to the fsc_iosatp_mode values returned by
+	 * pt_iommu_riscv_64_hw_info(), so the same value serves both fields.
+	 */
+	if (iommu->caps & RISCV_IOMMU_CAPABILITIES_SV57X4)
+		cfg.common.hw_max_vasz_lg2 = 57;
+	else if (iommu->caps & RISCV_IOMMU_CAPABILITIES_SV48X4)
+		cfg.common.hw_max_vasz_lg2 = 48;
+	else if (iommu->caps & RISCV_IOMMU_CAPABILITIES_SV39X4)
+		cfg.common.hw_max_vasz_lg2 = 39;
+	else
+		return -ENODEV;
+
+	cfg.common.hw_max_oasz_lg2 = 56;
+	cfg.common.features = BIT(PT_FEAT_FLUSH_RANGE);
+	domain->gstage_riscvpt.iommu.nid = NUMA_NO_NODE;
+
+	if (pt_iommu_riscv_64_init(&domain->gstage_riscvpt, &cfg, GFP_KERNEL))
+		return -ENOMEM;
+
+	domain->gscid = ida_alloc_range(&riscv_iommu_gscids, 1,
+					RISCV_IOMMU_MAX_GSCID, GFP_KERNEL);
+	if (domain->gscid < 0) {
+		pt_iommu_deinit(&domain->gstage_riscvpt.iommu);
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+
+static void riscv_iommu_gstage_free(struct riscv_iommu_domain *domain)
+{
+	if (!domain->gstage_riscvpt.iommu.ops)
+		return;
+
+	pt_iommu_deinit(&domain->gstage_riscvpt.iommu);
+
+	if (domain->gscid > 0) {
+		ida_free(&riscv_iommu_gscids, domain->gscid);
+		domain->gscid = 0;
+	}
+}
+
 static void riscv_iommu_free_paging_domain(struct iommu_domain *iommu_domain)
 {
 	struct riscv_iommu_domain *domain = iommu_domain_to_riscv(iommu_domain);
@@ -1214,6 +1286,7 @@ static void riscv_iommu_free_paging_domain(struct iommu_domain *iommu_domain)
 	WARN_ON(!list_empty(&domain->bonds));
 
 	riscv_iommu_ir_free_paging_domain(domain);
+	riscv_iommu_gstage_free(domain);
 
 	if ((int)domain->pscid > 0)
 		ida_free(&riscv_iommu_pscids, domain->pscid);
@@ -1262,11 +1335,22 @@ static int riscv_iommu_attach_paging_domain(struct iommu_domain *iommu_domain,
 	dc.ta = FIELD_PREP(RISCV_IOMMU_PC_TA_PSCID, domain->pscid) | RISCV_IOMMU_PC_TA_V;
 
 	if (domain->msi_root) {
+		struct pt_iommu_riscv_64_hw_info gstage_info;
+
+		ret = riscv_iommu_gstage_alloc(iommu, domain);
+		if (ret)
+			return ret;
+
+		pt_iommu_riscv_64_hw_info(&domain->gstage_riscvpt, &gstage_info);
+
 		dc.msiptp = virt_to_pfn(domain->msi_root) |
 			    FIELD_PREP(RISCV_IOMMU_DC_MSIPTP_MODE,
 				       RISCV_IOMMU_DC_MSIPTP_MODE_FLAT);
 		dc.msi_addr_mask = domain->msi_addr_mask;
 		dc.msi_addr_pattern = domain->msi_addr_pattern;
+		dc.iohgatp = FIELD_PREP(RISCV_IOMMU_DC_IOHGATP_MODE, gstage_info.fsc_iosatp_mode) |
+			     FIELD_PREP(RISCV_IOMMU_DC_IOHGATP_GSCID, domain->gscid) |
+			     FIELD_PREP(RISCV_IOMMU_DC_IOHGATP_PPN, gstage_info.ppn);
 	}
 
 	if (riscv_iommu_bond_link(domain, dev))
