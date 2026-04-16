@@ -35,6 +35,8 @@ struct riscv_iommu_domain {
 	int pscid;
 	int gscid;
 	struct pt_iommu_riscv_64 gstage_riscvpt;
+	const struct pt_iommu_ops *saved_pt_ops;
+	struct pt_iommu_ops gstage_pt_ops;
 	struct riscv_iommu_msipte *msi_root;
 	u64 msi_addr_mask;
 	u64 msi_addr_pattern;
@@ -134,6 +136,7 @@ void riscv_iommu_ir_irq_domain_remove(struct device *dev, struct riscv_iommu_inf
 int riscv_iommu_ir_attach_paging_domain(struct riscv_iommu_domain *domain,
 					struct device *dev);
 void riscv_iommu_ir_free_paging_domain(struct riscv_iommu_domain *domain);
+void riscv_iommu_gstage_install_ops(struct riscv_iommu_domain *domain);
 
 #define riscv_iommu_readl(iommu, addr) \
 	readl_relaxed((iommu)->reg + (addr))
