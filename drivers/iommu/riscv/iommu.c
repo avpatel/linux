@@ -1271,12 +1271,83 @@ static void riscv_iommu_gstage_free(struct riscv_iommu_domain *domain)
 	if (!domain->gstage_riscvpt.iommu.ops)
 		return;
 
+	if (domain->saved_pt_ops) {
+		domain->riscvpt.iommu.ops = domain->saved_pt_ops;
+		domain->saved_pt_ops = NULL;
+	}
+
 	pt_iommu_deinit(&domain->gstage_riscvpt.iommu);
 
 	if (domain->gscid > 0) {
 		ida_free(&riscv_iommu_gscids, domain->gscid);
 		domain->gscid = 0;
 	}
+}
+
+static int riscv_iommu_gstage_map_range(struct pt_iommu *iommu_table,
+					dma_addr_t iova, phys_addr_t paddr,
+					dma_addr_t len, unsigned int prot,
+					gfp_t gfp, size_t *mapped)
+{
+	struct riscv_iommu_domain *domain =
+		container_of(iommu_table, struct riscv_iommu_domain, riscvpt.iommu);
+	int ret;
+
+	ret = domain->saved_pt_ops->map_range(iommu_table, iova, paddr, len,
+					      prot, gfp, mapped);
+	if (ret)
+		return ret;
+
+	/*
+	 * map_range guarantees contiguity in paddr space, so the full
+	 * mapped range can be identity-mapped in the g-stage using paddr.
+	 */
+	{
+		struct pt_iommu *gpt = &domain->gstage_riscvpt.iommu;
+		size_t gmapped = 0;
+
+		ret = gpt->ops->map_range(gpt, paddr, paddr, *mapped,
+					  IOMMU_READ | IOMMU_WRITE, gfp, &gmapped);
+		/*
+		 * -EADDRINUSE means the g-stage already has an identity
+		 * mapping for this physical address (e.g. from a previous
+		 * DMA mapping of the same page). Since the g-stage is a
+		 * flat identity table (paddr -> paddr), the existing mapping
+		 * is correct — treat this as success.
+		 */
+		if (ret == -EADDRINUSE)
+			ret = 0;
+		if (ret) {
+			struct iommu_iotlb_gather gather;
+
+			iommu_iotlb_gather_init(&gather);
+			domain->saved_pt_ops->unmap_range(iommu_table, iova, *mapped, &gather);
+		}
+	}
+
+	return ret;
+}
+
+void riscv_iommu_gstage_install_ops(struct riscv_iommu_domain *domain)
+{
+	/*
+	 * Replace the generic PT ops with per-domain wrappers that populate
+	 * the g-stage with identity mappings for the physical addresses that
+	 * s-stage DMA mappings resolve to. The g-stage must be non-BARE when
+	 * MSI_FLAT is active; DMA addresses that pass through the s-stage are
+	 * then translated by the g-stage: s-stage(IOVA->paddr), g-stage(paddr->paddr).
+	 */
+	domain->saved_pt_ops = domain->riscvpt.iommu.ops;
+	domain->gstage_pt_ops = *domain->saved_pt_ops;
+	domain->gstage_pt_ops.map_range = riscv_iommu_gstage_map_range;
+	/*
+	 * unmap_range is intentionally not overridden. G-stage entries are
+	 * never removed: the same physical page may be mapped by multiple
+	 * s-stage IOVAs, so removing the g-stage entry when one IOVA is
+	 * unmapped would break other active mappings. The s-stage is the
+	 * security boundary; the g-stage is a pass-through.
+	 */
+	domain->riscvpt.iommu.ops = &domain->gstage_pt_ops;
 }
 
 static void riscv_iommu_free_paging_domain(struct iommu_domain *iommu_domain)
@@ -1342,6 +1413,9 @@ static int riscv_iommu_attach_paging_domain(struct iommu_domain *iommu_domain,
 			return ret;
 
 		pt_iommu_riscv_64_hw_info(&domain->gstage_riscvpt, &gstage_info);
+
+		if (!domain->saved_pt_ops)
+			riscv_iommu_gstage_install_ops(domain);
 
 		dc.msiptp = virt_to_pfn(domain->msi_root) |
 			    FIELD_PREP(RISCV_IOMMU_DC_MSIPTP_MODE,
