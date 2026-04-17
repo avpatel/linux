@@ -12,6 +12,8 @@
 #define _RISCV_IOMMU_H_
 
 #include <linux/iommu.h>
+#include <linux/refcount.h>
+#include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/iopoll.h>
 #include <linux/generic_pt/iommu.h>
@@ -38,6 +40,9 @@ struct riscv_iommu_domain {
 	const struct pt_iommu_ops *saved_pt_ops;
 	struct pt_iommu_ops gstage_pt_ops;
 	struct riscv_iommu_msipte *msi_root;
+	refcount_t *msi_pte_counts;
+	raw_spinlock_t msi_lock;
+	u32 msitbl_config;
 	u64 msi_addr_mask;
 	u64 msi_addr_pattern;
 	u32 group_index_bits;
@@ -128,6 +133,12 @@ struct riscv_iommu_device {
 int riscv_iommu_init(struct riscv_iommu_device *iommu);
 void riscv_iommu_remove(struct riscv_iommu_device *iommu);
 void riscv_iommu_disable(struct riscv_iommu_device *iommu);
+
+void riscv_iommu_cmd_send(struct riscv_iommu_device *iommu,
+			  struct riscv_iommu_command *cmd);
+void riscv_iommu_cmd_sync(struct riscv_iommu_device *iommu, unsigned int timeout_us);
+void riscv_iommu_iodir_update(struct riscv_iommu_device *iommu,
+			      struct device *dev, struct riscv_iommu_dc *new_dc);
 
 struct irq_domain *riscv_iommu_ir_irq_domain_create(struct riscv_iommu_device *iommu,
 						    struct device *dev,
