@@ -1389,7 +1389,18 @@ static struct iommu_domain *riscv_iommu_alloc_paging_domain(struct device *dev)
 		dev_err(dev, "cannot find supported page table mode\n");
 		return ERR_PTR(-ENODEV);
 	}
-	cfg.common.hw_max_oasz_lg2 = 56;
+	/*
+	 * When MSI_FLAT is active the g-stage is enabled as a non-BARE
+	 * identity table. The g-stage input is the s-stage output address,
+	 * so the s-stage output width must not exceed the g-stage input
+	 * width (hw_max_vasz_lg2). Cap hw_max_oasz_lg2 accordingly.
+	 * For Sv57 the physical address space is at most 56 bits, which
+	 * already fits within the 57-bit g-stage range.
+	 */
+	if (iommu->caps & RISCV_IOMMU_CAPABILITIES_MSI_FLAT)
+		cfg.common.hw_max_oasz_lg2 = min(cfg.common.hw_max_vasz_lg2, 56U);
+	else
+		cfg.common.hw_max_oasz_lg2 = 56;
 
 	domain = kzalloc_obj(*domain);
 	if (!domain)
