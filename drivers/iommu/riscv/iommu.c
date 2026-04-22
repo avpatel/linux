@@ -1607,10 +1607,15 @@ static struct iommu_group *riscv_iommu_device_group(struct device *dev)
 
 static bool riscv_iommu_capable(struct device *dev, enum iommu_cap cap)
 {
+	struct riscv_iommu_device *iommu = dev_to_iommu(dev);
+
 	switch (cap) {
 	case IOMMU_CAP_CACHE_COHERENCY:
 		/* The RISC-V IOMMU is always DMA cache coherent. */
 		return true;
+	case IOMMU_CAP_VIRT_MSI_ISOLATION:
+		return imsic_enabled() &&
+		       !!(iommu->caps & RISCV_IOMMU_CAPABILITIES_MSI_FLAT);
 	default:
 		return false;
 	}
