@@ -2,6 +2,7 @@
 /*
  * Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES
  */
+#include <linux/irqdomain.h>
 #include <linux/vfio.h>
 #include <linux/iommufd.h>
 
@@ -117,11 +118,29 @@ EXPORT_SYMBOL_GPL(vfio_iommufd_get_dev_id);
 int vfio_iommufd_physical_bind(struct vfio_device *vdev,
 			       struct iommufd_ctx *ictx, u32 *out_device_id)
 {
+	struct irq_domain *domain = dev_get_msi_domain(vdev->dev);
 	struct iommufd_device *idev;
+	bool set_isolated = false;
+
+	/*
+	 * When a device is assigned to a guest via the iommufd cdev path,
+	 * vdev->kvm is already set before bind is called. If the IOMMU
+	 * provides virtualization MSI isolation, mark the MSI domain as
+	 * isolated so iommufd_device_bind() accepts it without requiring
+	 * allow_unsafe_interrupts.
+	 */
+	if (vdev->kvm && domain &&
+	    device_iommu_capable(vdev->dev, IOMMU_CAP_VIRT_MSI_ISOLATION)) {
+		domain->flags |= IRQ_DOMAIN_FLAG_ISOLATED_MSI;
+		set_isolated = true;
+	}
 
 	idev = iommufd_device_bind(ictx, vdev->dev, out_device_id);
-	if (IS_ERR(idev))
+	if (IS_ERR(idev)) {
+		if (set_isolated)
+			domain->flags &= ~IRQ_DOMAIN_FLAG_ISOLATED_MSI;
 		return PTR_ERR(idev);
+	}
 	vdev->iommufd_device = idev;
 	ida_init(&vdev->pasids);
 	return 0;
@@ -130,9 +149,13 @@ EXPORT_SYMBOL_GPL(vfio_iommufd_physical_bind);
 
 void vfio_iommufd_physical_unbind(struct vfio_device *vdev)
 {
+	struct irq_domain *domain = dev_get_msi_domain(vdev->dev);
 	int pasid;
 
 	lockdep_assert_held(&vdev->dev_set->lock);
+
+	if (domain && device_iommu_capable(vdev->dev, IOMMU_CAP_VIRT_MSI_ISOLATION))
+		domain->flags &= ~IRQ_DOMAIN_FLAG_ISOLATED_MSI;
 
 	while ((pasid = ida_find_first(&vdev->pasids)) >= 0) {
 		iommufd_device_detach(vdev->iommufd_device, pasid);
