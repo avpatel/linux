@@ -274,6 +274,13 @@ enum iommu_cap {
 	IOMMU_CAP_DIRTY_TRACKING,	/* IOMMU supports dirty tracking */
 	/* ATS is supported and may be enabled for this device */
 	IOMMU_CAP_PCI_ATS_SUPPORTED,
+	/*
+	 * IOMMU provides MSI remapping for virtualization. When a device is
+	 * assigned to a guest, MSIs are redirected to guest-exclusive addresses,
+	 * isolating the guest from the host and other guests. Isolation is only
+	 * guaranteed when virtualization is in use.
+	 */
+	IOMMU_CAP_VIRT_MSI_ISOLATION,
 };
 
 /* These are the possible reserved region types */
