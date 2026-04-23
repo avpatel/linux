@@ -1052,10 +1052,10 @@ static void riscv_iommu_iodir_iotinval(struct riscv_iommu_device *iommu,
 {
 	struct riscv_iommu_command cmd;
 
-	riscv_iommu_cmd_inval_vma(&cmd);
-
 	if (FIELD_GET(RISCV_IOMMU_DC_IOHGATP_MODE, iohgatp) ==
 	    RISCV_IOMMU_DC_IOHGATP_MODE_BARE) {
+		riscv_iommu_cmd_inval_vma(&cmd);
+
 		if (inval_pdt) {
 			/*
 			 * IOTINVAL.VMA with GV=AV=0, and PSCV=1, and
@@ -1077,7 +1077,10 @@ static void riscv_iommu_iodir_iotinval(struct riscv_iommu_device *iommu,
 			}
 			/* else: IOTINVAL.VMA with GV=AV=PSCV=0 */
 		}
+
+		riscv_iommu_cmd_send(iommu, &cmd);
 	} else {
+		riscv_iommu_cmd_inval_vma(&cmd);
 		riscv_iommu_cmd_inval_set_gscid(&cmd,
 			FIELD_GET(RISCV_IOMMU_DC_IOHGATP_GSCID, iohgatp));
 
@@ -1089,17 +1092,15 @@ static void riscv_iommu_iodir_iotinval(struct riscv_iommu_device *iommu,
 			riscv_iommu_cmd_inval_set_pscid(&cmd,
 				FIELD_GET(RISCV_IOMMU_PC_TA_PSCID, pc->ta));
 		}
-		/*
-		 * else: IOTINVAL.VMA with GV=1,AV=PSCV=0,and
-		 * GSCID=DC.iohgatp.GSCID
-		 *
-		 * IOTINVAL.GVMA with GV=1,AV=0,and
-		 * GSCID=DC.iohgatp.GSCID
-		 * TODO: For now, the Second-Stage feature have not yet been merged,
-		 * also issue IOTINVAL.GVMA once second-stage support is merged.
-		 */
+		/* else: IOTINVAL.VMA with GV=1,AV=PSCV=0 and GSCID=DC.iohgatp.GSCID */
+		riscv_iommu_cmd_send(iommu, &cmd);
+
+		/* IOTINVAL.GVMA with GV=1, AV=0, GSCID=DC.iohgatp.GSCID */
+		riscv_iommu_cmd_inval_gvma(&cmd);
+		riscv_iommu_cmd_inval_set_gscid(&cmd,
+			FIELD_GET(RISCV_IOMMU_DC_IOHGATP_GSCID, iohgatp));
+		riscv_iommu_cmd_send(iommu, &cmd);
 	}
-	riscv_iommu_cmd_send(iommu, &cmd);
 }
 /*
  * Update IODIR for the device.
