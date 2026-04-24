@@ -23225,6 +23225,7 @@ K:	riscv
 
 RISC-V IOMMU
 M:	Tomasz Jeznach <tomasz.jeznach@linux.dev>
+M:	Andrew Jones <andrew.jones@linux.dev>
 L:	iommu@lists.linux.dev
 L:	linux-riscv@lists.infradead.org
 S:	Maintained
