@@ -1477,8 +1477,12 @@ static int platform_dma_configure(struct device *dev)
 	int ret = 0;
 
 	if (is_of_node(fwnode)) {
+		if (!dev_get_msi_domain(dev))
+			of_msi_configure(dev, dev->of_node);
 		ret = of_dma_configure(dev, to_of_node(fwnode), true);
 	} else if (is_acpi_device_node(fwnode)) {
+		if (!dev_get_msi_domain(dev))
+			acpi_msi_configure(dev);
 		attr = acpi_get_dma_attr(to_acpi_device_node(fwnode));
 		ret = acpi_dma_configure(dev, attr);
 	}

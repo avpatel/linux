@@ -48,7 +48,6 @@ static int riscv_iommu_platform_probe(struct platform_device *pdev)
 	enum riscv_iommu_igs_settings igs;
 	struct device *dev = &pdev->dev;
 	struct riscv_iommu_device *iommu = NULL;
-	struct irq_domain *msi_domain;
 	struct resource *res = NULL;
 	int vec, ret;
 
@@ -74,14 +73,6 @@ static int riscv_iommu_platform_probe(struct platform_device *pdev)
 	switch (igs) {
 	case RISCV_IOMMU_CAPABILITIES_IGS_BOTH:
 	case RISCV_IOMMU_CAPABILITIES_IGS_MSI:
-		if (is_of_node(dev_fwnode(dev))) {
-			of_msi_configure(dev, to_of_node(dev->fwnode));
-		} else {
-			msi_domain = irq_find_matching_fwnode(imsic_acpi_get_fwnode(dev),
-							      DOMAIN_BUS_PLATFORM_MSI);
-			dev_set_msi_domain(dev, msi_domain);
-		}
-
 		if (!dev_get_msi_domain(dev)) {
 			dev_warn(dev, "failed to find an MSI domain\n");
 			goto msi_fail;
