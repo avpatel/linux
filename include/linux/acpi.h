@@ -260,6 +260,12 @@ acpi_numa_processor_affinity_init(struct acpi_srat_cpu_affinity *pa) { }
 
 void acpi_numa_x2apic_affinity_init(struct acpi_srat_x2apic_cpu_affinity *pa);
 
+#if defined(CONFIG_RISCV)
+void acpi_arch_msi_configure(struct device *dev);
+#else
+static inline void acpi_arch_msi_configure(struct device *dev) { }
+#endif
+
 #if defined(CONFIG_ARM64) || defined(CONFIG_LOONGARCH)
 void acpi_arch_dma_setup(struct device *dev);
 #else
@@ -1058,6 +1064,10 @@ static inline enum dev_dma_attr acpi_get_dma_attr(struct acpi_device *adev)
 static inline int acpi_dma_get_range(struct device *dev, const struct bus_dma_region **map)
 {
 	return -ENODEV;
+}
+
+static inline void acpi_msi_configure(struct device *dev)
+{
 }
 
 static inline int acpi_dma_configure(struct device *dev,

@@ -1651,6 +1651,16 @@ static int acpi_iommu_configure_id(struct device *dev, const u32 *id_in)
 #endif /* !CONFIG_IOMMU_API */
 
 /**
+ * acpi_msi_configure - Set-up MSI domain for the device.
+ * @dev: The pointer to the device
+ */
+void acpi_msi_configure(struct device *dev)
+{
+	acpi_arch_msi_configure(dev);
+}
+EXPORT_SYMBOL_GPL(acpi_msi_configure);
+
+/**
  * acpi_dma_configure_id - Set-up DMA configuration for the device.
  * @dev: The pointer to the device
  * @attr: device dma attributes

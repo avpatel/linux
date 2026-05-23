@@ -175,7 +175,6 @@ static const struct msi_domain_template aplic_msi_template = {
 int aplic_msi_setup(struct device *dev, void __iomem *regs)
 {
 	const struct imsic_global_config *imsic_global;
-	struct irq_domain *msi_domain;
 	struct aplic_priv *priv;
 	struct aplic_msicfg *mc;
 	phys_addr_t pa;
@@ -244,32 +243,6 @@ int aplic_msi_setup(struct device *dev, void __iomem *regs)
 
 	/* Setup global config and interrupt delivery */
 	aplic_init_hw_global(priv, true);
-
-	/* Set the APLIC device MSI domain if not available */
-	if (!dev_get_msi_domain(dev)) {
-		/*
-		 * The device MSI domain for OF devices is only set at the
-		 * time of populating/creating OF device. If the device MSI
-		 * domain is discovered later after the OF device is created
-		 * then we need to set it explicitly before using any platform
-		 * MSI functions.
-		 *
-		 * In case of APLIC device, the parent MSI domain is always
-		 * IMSIC and the IMSIC MSI domains are created later through
-		 * the platform driver probing so we set it explicitly here.
-		 */
-		if (is_of_node(dev->fwnode)) {
-			of_msi_configure(dev, to_of_node(dev->fwnode));
-		} else {
-			msi_domain = irq_find_matching_fwnode(imsic_acpi_get_fwnode(dev),
-							      DOMAIN_BUS_PLATFORM_MSI);
-			if (msi_domain)
-				dev_set_msi_domain(dev, msi_domain);
-		}
-
-		if (!dev_get_msi_domain(dev))
-			return -EPROBE_DEFER;
-	}
 
 	if (!msi_create_device_irq_domain(dev, MSI_DEFAULT_DOMAIN, &aplic_msi_template,
 					  priv->nr_irqs + 1, priv, priv)) {
