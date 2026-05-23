@@ -260,35 +260,6 @@ static int rpmi_sysmsi_probe(struct platform_device *pdev)
 			riscv_acpi_update_gsi_range(priv->gsi_base, priv->nr_irqs);
 	}
 
-	/*
-	 * The device MSI domain for platform devices on RISC-V architecture
-	 * is only available after the MSI controller driver is probed so,
-	 * explicitly configure here.
-	 */
-	if (!dev_get_msi_domain(dev)) {
-		/*
-		 * The device MSI domain for OF devices is only set at the
-		 * time of populating/creating OF device. If the device MSI
-		 * domain is discovered later after the OF device is created
-		 * then we need to set it explicitly before using any platform
-		 * MSI functions.
-		 */
-		if (is_of_node(fwnode)) {
-			of_msi_configure(dev, dev_of_node(dev));
-		} else if (is_acpi_device_node(fwnode)) {
-			struct irq_domain *msi_domain;
-
-			msi_domain = irq_find_matching_fwnode(imsic_acpi_get_fwnode(dev),
-							      DOMAIN_BUS_PLATFORM_MSI);
-			dev_set_msi_domain(dev, msi_domain);
-		}
-
-		if (!dev_get_msi_domain(dev)) {
-			mbox_free_channel(priv->chan);
-			return -EPROBE_DEFER;
-		}
-	}
-
 	if (!msi_create_device_irq_domain(dev, MSI_DEFAULT_DOMAIN,
 					  &rpmi_sysmsi_template,
 					  priv->nr_irqs, priv, priv)) {
