@@ -902,35 +902,6 @@ static int mpxy_mbox_probe(struct platform_device *pdev)
 
 	/* Setup MSIs for mailbox (if required) */
 	if (mbox->msi_count) {
-		/*
-		 * The device MSI domain for platform devices on RISC-V architecture
-		 * is only available after the MSI controller driver is probed so,
-		 * explicitly configure here.
-		 */
-		if (!dev_get_msi_domain(dev)) {
-			struct fwnode_handle *fwnode = dev_fwnode(dev);
-
-			/*
-			 * The device MSI domain for OF devices is only set at the
-			 * time of populating/creating OF device. If the device MSI
-			 * domain is discovered later after the OF device is created
-			 * then we need to set it explicitly before using any platform
-			 * MSI functions.
-			 */
-			if (is_of_node(fwnode)) {
-				of_msi_configure(dev, dev_of_node(dev));
-			} else if (is_acpi_device_node(fwnode)) {
-				struct irq_domain *msi_domain;
-
-				msi_domain = irq_find_matching_fwnode(imsic_acpi_get_fwnode(dev),
-								      DOMAIN_BUS_PLATFORM_MSI);
-				dev_set_msi_domain(dev, msi_domain);
-			}
-
-			if (!dev_get_msi_domain(dev))
-				return -EPROBE_DEFER;
-		}
-
 		mbox->msi_index_to_channel = devm_kcalloc(dev, mbox->msi_count,
 							  sizeof(*mbox->msi_index_to_channel),
 							  GFP_KERNEL);

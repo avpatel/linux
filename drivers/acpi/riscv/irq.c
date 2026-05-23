@@ -5,8 +5,11 @@
  */
 
 #include <linux/acpi.h>
+#include <linux/device.h>
 #include <linux/sort.h>
 #include <linux/irq.h>
+#include <linux/irqdomain.h>
+#include <linux/irqchip/riscv-imsic.h>
 
 #include "init.h"
 
@@ -395,6 +398,16 @@ static u32 riscv_acpi_add_irq_dep(acpi_handle handle)
 	}
 
 	return count;
+}
+
+void acpi_arch_msi_configure(struct device *dev)
+{
+	struct irq_domain *msi_domain;
+
+	msi_domain = irq_find_matching_fwnode(imsic_acpi_get_fwnode(dev),
+					      DOMAIN_BUS_PLATFORM_MSI);
+	if (msi_domain)
+		dev_set_msi_domain(dev, msi_domain);
 }
 
 u32 arch_acpi_add_auto_dep(acpi_handle handle)
