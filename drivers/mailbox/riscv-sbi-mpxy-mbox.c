@@ -17,7 +17,6 @@
 #include <linux/module.h>
 #include <linux/msi.h>
 #include <linux/of_irq.h>
-#include <linux/percpu.h>
 #include <linux/platform_device.h>
 #include <linux/smp.h>
 #include <linux/string.h>
@@ -84,290 +83,6 @@ struct sbi_mpxy_rpmi_channel_attrs {
 	/* RPMI implementation version */
 	u32 impl_version;
 };
-
-/* SBI MPXY channel IDs data in shared memory */
-struct sbi_mpxy_channel_ids_data {
-	/* Remaining number of channel ids */
-	__le32 remaining;
-	/* Returned channel ids in current function call */
-	__le32 returned;
-	/* Returned channel id array */
-	__le32 channel_array[];
-};
-
-/* SBI MPXY notification data in shared memory */
-struct sbi_mpxy_notification_data {
-	/* Remaining number of notification events */
-	__le32 remaining;
-	/* Number of notification events returned */
-	__le32 returned;
-	/* Number of notification events lost */
-	__le32 lost;
-	/* Reserved for future use */
-	__le32 reserved;
-	/* Returned channel id array */
-	u8 events_data[];
-};
-
-/* ====== MPXY data structures & helper routines ====== */
-
-/* MPXY Per-CPU or local context */
-struct mpxy_local {
-	/* Shared memory base address */
-	void *shmem;
-	/* Shared memory physical address */
-	phys_addr_t shmem_phys_addr;
-	/* Flag representing whether shared memory is active or not */
-	bool shmem_active;
-};
-
-static DEFINE_PER_CPU(struct mpxy_local, mpxy_local);
-static unsigned long mpxy_shmem_size;
-static bool mpxy_shmem_init_done;
-
-static int mpxy_get_channel_count(u32 *channel_count)
-{
-	struct mpxy_local *mpxy = this_cpu_ptr(&mpxy_local);
-	struct sbi_mpxy_channel_ids_data *sdata = mpxy->shmem;
-	u32 remaining, returned;
-	struct sbiret sret;
-
-	if (!mpxy->shmem_active)
-		return -ENODEV;
-	if (!channel_count)
-		return -EINVAL;
-
-	get_cpu();
-
-	/* Get the remaining and returned fields to calculate total */
-	sret = sbi_ecall(SBI_EXT_MPXY, SBI_EXT_MPXY_GET_CHANNEL_IDS,
-			 0, 0, 0, 0, 0, 0);
-	if (sret.error)
-		goto err_put_cpu;
-
-	remaining = le32_to_cpu(sdata->remaining);
-	returned = le32_to_cpu(sdata->returned);
-	*channel_count = remaining + returned;
-
-err_put_cpu:
-	put_cpu();
-	return sbi_err_map_linux_errno(sret.error);
-}
-
-static int mpxy_get_channel_ids(u32 channel_count, u32 *channel_ids)
-{
-	struct mpxy_local *mpxy = this_cpu_ptr(&mpxy_local);
-	struct sbi_mpxy_channel_ids_data *sdata = mpxy->shmem;
-	u32 remaining, returned, count, start_index = 0;
-	struct sbiret sret;
-
-	if (!mpxy->shmem_active)
-		return -ENODEV;
-	if (!channel_count || !channel_ids)
-		return -EINVAL;
-
-	get_cpu();
-
-	do {
-		sret = sbi_ecall(SBI_EXT_MPXY, SBI_EXT_MPXY_GET_CHANNEL_IDS,
-				 start_index, 0, 0, 0, 0, 0);
-		if (sret.error)
-			goto err_put_cpu;
-
-		remaining = le32_to_cpu(sdata->remaining);
-		returned = le32_to_cpu(sdata->returned);
-
-		count = returned < (channel_count - start_index) ?
-			returned : (channel_count - start_index);
-		memcpy_from_le32(&channel_ids[start_index], sdata->channel_array, count);
-		start_index += count;
-	} while (remaining && start_index < channel_count);
-
-err_put_cpu:
-	put_cpu();
-	return sbi_err_map_linux_errno(sret.error);
-}
-
-static int mpxy_read_attrs(u32 channel_id, u32 base_attrid, u32 attr_count,
-			   u32 *attrs_buf)
-{
-	struct mpxy_local *mpxy = this_cpu_ptr(&mpxy_local);
-	struct sbiret sret;
-
-	if (!mpxy->shmem_active)
-		return -ENODEV;
-	if (!attr_count || !attrs_buf)
-		return -EINVAL;
-
-	get_cpu();
-
-	sret = sbi_ecall(SBI_EXT_MPXY, SBI_EXT_MPXY_READ_ATTRS,
-			 channel_id, base_attrid, attr_count, 0, 0, 0);
-	if (sret.error)
-		goto err_put_cpu;
-
-	memcpy_from_le32(attrs_buf, (__le32 *)mpxy->shmem, attr_count);
-
-err_put_cpu:
-	put_cpu();
-	return sbi_err_map_linux_errno(sret.error);
-}
-
-static int mpxy_write_attrs(u32 channel_id, u32 base_attrid, u32 attr_count,
-			    u32 *attrs_buf)
-{
-	struct mpxy_local *mpxy = this_cpu_ptr(&mpxy_local);
-	struct sbiret sret;
-
-	if (!mpxy->shmem_active)
-		return -ENODEV;
-	if (!attr_count || !attrs_buf)
-		return -EINVAL;
-
-	get_cpu();
-
-	memcpy_to_le32((__le32 *)mpxy->shmem, attrs_buf, attr_count);
-	sret = sbi_ecall(SBI_EXT_MPXY, SBI_EXT_MPXY_WRITE_ATTRS,
-			 channel_id, base_attrid, attr_count, 0, 0, 0);
-
-	put_cpu();
-	return sbi_err_map_linux_errno(sret.error);
-}
-
-static int mpxy_send_message_with_resp(u32 channel_id, u32 msg_id,
-				       void *tx, unsigned long tx_len,
-				       void *rx, unsigned long max_rx_len,
-				       unsigned long *rx_len)
-{
-	struct mpxy_local *mpxy = this_cpu_ptr(&mpxy_local);
-	unsigned long rx_bytes;
-	struct sbiret sret;
-
-	if (!mpxy->shmem_active)
-		return -ENODEV;
-	if (!tx && tx_len)
-		return -EINVAL;
-
-	get_cpu();
-
-	/* Message protocols allowed to have no data in messages */
-	if (tx_len)
-		memcpy(mpxy->shmem, tx, tx_len);
-
-	sret = sbi_ecall(SBI_EXT_MPXY, SBI_EXT_MPXY_SEND_MSG_WITH_RESP,
-			 channel_id, msg_id, tx_len, 0, 0, 0);
-	if (rx && !sret.error) {
-		rx_bytes = sret.value;
-		if (rx_bytes > max_rx_len) {
-			put_cpu();
-			return -ENOSPC;
-		}
-
-		memcpy(rx, mpxy->shmem, rx_bytes);
-		if (rx_len)
-			*rx_len = rx_bytes;
-	}
-
-	put_cpu();
-	return sbi_err_map_linux_errno(sret.error);
-}
-
-static int mpxy_send_message_without_resp(u32 channel_id, u32 msg_id,
-					  void *tx, unsigned long tx_len)
-{
-	struct mpxy_local *mpxy = this_cpu_ptr(&mpxy_local);
-	struct sbiret sret;
-
-	if (!mpxy->shmem_active)
-		return -ENODEV;
-	if (!tx && tx_len)
-		return -EINVAL;
-
-	get_cpu();
-
-	/* Message protocols allowed to have no data in messages */
-	if (tx_len)
-		memcpy(mpxy->shmem, tx, tx_len);
-
-	sret = sbi_ecall(SBI_EXT_MPXY, SBI_EXT_MPXY_SEND_MSG_WITHOUT_RESP,
-			 channel_id, msg_id, tx_len, 0, 0, 0);
-
-	put_cpu();
-	return sbi_err_map_linux_errno(sret.error);
-}
-
-static int mpxy_get_notifications(u32 channel_id,
-				  struct sbi_mpxy_notification_data *notif_data,
-				  unsigned long *events_data_len)
-{
-	struct mpxy_local *mpxy = this_cpu_ptr(&mpxy_local);
-	struct sbiret sret;
-
-	if (!mpxy->shmem_active)
-		return -ENODEV;
-	if (!notif_data || !events_data_len)
-		return -EINVAL;
-
-	get_cpu();
-
-	sret = sbi_ecall(SBI_EXT_MPXY, SBI_EXT_MPXY_GET_NOTIFICATION_EVENTS,
-			 channel_id, 0, 0, 0, 0, 0);
-	if (sret.error)
-		goto err_put_cpu;
-
-	memcpy(notif_data, mpxy->shmem, sret.value + 16);
-	*events_data_len = sret.value;
-
-err_put_cpu:
-	put_cpu();
-	return sbi_err_map_linux_errno(sret.error);
-}
-
-static int mpxy_get_shmem_size(unsigned long *shmem_size)
-{
-	struct sbiret sret;
-
-	sret = sbi_ecall(SBI_EXT_MPXY, SBI_EXT_MPXY_GET_SHMEM_SIZE,
-			 0, 0, 0, 0, 0, 0);
-	if (sret.error)
-		return sbi_err_map_linux_errno(sret.error);
-	if (shmem_size)
-		*shmem_size = sret.value;
-	return 0;
-}
-
-static int mpxy_setup_shmem(unsigned int cpu)
-{
-	struct page *shmem_page;
-	struct mpxy_local *mpxy;
-	struct sbiret sret;
-
-	mpxy = per_cpu_ptr(&mpxy_local, cpu);
-	if (mpxy->shmem_active)
-		return 0;
-
-	shmem_page = alloc_pages(GFP_KERNEL | __GFP_ZERO, get_order(mpxy_shmem_size));
-	if (!shmem_page)
-		return -ENOMEM;
-
-	/*
-	 * Linux setup of shmem is done in mpxy OVERWRITE mode.
-	 * flags[1:0] = 00b
-	 */
-	sret = sbi_ecall(SBI_EXT_MPXY, SBI_EXT_MPXY_SET_SHMEM,
-			 page_to_phys(shmem_page), 0, 0, 0, 0, 0);
-	if (sret.error) {
-		free_pages((unsigned long)page_to_virt(shmem_page),
-			   get_order(mpxy_shmem_size));
-		return sbi_err_map_linux_errno(sret.error);
-	}
-
-	mpxy->shmem = page_to_virt(shmem_page);
-	mpxy->shmem_phys_addr = page_to_phys(shmem_page);
-	mpxy->shmem_active = true;
-
-	return 0;
-}
 
 /* ====== MPXY mailbox data structures ====== */
 
@@ -442,13 +157,13 @@ static void mpxy_mbox_send_rpmi_data(struct mpxy_mbox_channel *mchan,
 			msg->error = -EIO;
 			break;
 		}
-		msg->error = mpxy_send_message_with_resp(mchan->channel_id,
-							 msg->data.service_id,
-							 msg->data.request,
-							 msg->data.request_len,
-							 msg->data.response,
-							 msg->data.max_response_len,
-							 &msg->data.out_response_len);
+		msg->error = sbi_mpxy_send_message_with_resp(mchan->channel_id,
+							     msg->data.service_id,
+							     msg->data.request,
+							     msg->data.request_len,
+							     msg->data.response,
+							     msg->data.max_response_len,
+							     &msg->data.out_response_len);
 		break;
 	case RPMI_MBOX_MSG_TYPE_SEND_WITHOUT_RESPONSE:
 		if ((!msg->data.request && msg->data.request_len) ||
@@ -460,10 +175,10 @@ static void mpxy_mbox_send_rpmi_data(struct mpxy_mbox_channel *mchan,
 			msg->error = -EIO;
 			break;
 		}
-		msg->error = mpxy_send_message_without_resp(mchan->channel_id,
-							    msg->data.service_id,
-							    msg->data.request,
-							    msg->data.request_len);
+		msg->error = sbi_mpxy_send_message_without_resp(mchan->channel_id,
+								msg->data.service_id,
+								msg->data.request,
+								msg->data.request_len);
 		break;
 	default:
 		msg->error = -EOPNOTSUPP;
@@ -496,10 +211,10 @@ static void mpxy_mbox_peek_rpmi_data(struct mbox_chan *chan,
 
 static int mpxy_mbox_read_rpmi_attrs(struct mpxy_mbox_channel *mchan)
 {
-	return mpxy_read_attrs(mchan->channel_id,
-			       SBI_MPXY_ATTR_MSGPROTO_ATTR_START,
-			       sizeof(mchan->rpmi_attrs) / sizeof(u32),
-			       (u32 *)&mchan->rpmi_attrs);
+	return sbi_mpxy_read_attrs(mchan->channel_id,
+				   SBI_MPXY_ATTR_MSGPROTO_ATTR_START,
+				   sizeof(mchan->rpmi_attrs) / sizeof(u32),
+				   (u32 *)&mchan->rpmi_attrs);
 }
 
 /* ====== MPXY mailbox callbacks ====== */
@@ -528,7 +243,7 @@ static bool mpxy_mbox_peek_data(struct mbox_chan *chan)
 		return false;
 
 	do {
-		rc = mpxy_get_notifications(mchan->channel_id, notif, &data_len);
+		rc = sbi_mpxy_get_notifications(mchan->channel_id, notif, &data_len);
 		if (rc || !data_len)
 			break;
 
@@ -572,8 +287,8 @@ static int mpxy_mbox_setup_msi(struct mbox_chan *chan,
 
 	/* Enable channel MSI control */
 	mchan->attrs.msi_control = 1;
-	rc = mpxy_write_attrs(mchan->channel_id, SBI_MPXY_ATTR_MSI_CONTROL,
-			      1, &mchan->attrs.msi_control);
+	rc = sbi_mpxy_write_attrs(mchan->channel_id, SBI_MPXY_ATTR_MSI_CONTROL,
+				  1, &mchan->attrs.msi_control);
 	if (rc) {
 		dev_err(dev, "enable MSI control failed for MPXY channel 0x%x\n",
 			mchan->channel_id);
@@ -601,8 +316,8 @@ static void mpxy_mbox_cleanup_msi(struct mbox_chan *chan,
 
 	/* Disable channel MSI control */
 	mchan->attrs.msi_control = 0;
-	rc = mpxy_write_attrs(mchan->channel_id, SBI_MPXY_ATTR_MSI_CONTROL,
-			      1, &mchan->attrs.msi_control);
+	rc = sbi_mpxy_write_attrs(mchan->channel_id, SBI_MPXY_ATTR_MSI_CONTROL,
+				  1, &mchan->attrs.msi_control);
 	if (rc) {
 		dev_err(dev, "disable MSI control failed for MPXY channel 0x%x\n",
 			mchan->channel_id);
@@ -627,8 +342,8 @@ static int mpxy_mbox_setup_events(struct mpxy_mbox_channel *mchan)
 
 	/* Enable channel events state */
 	mchan->attrs.events_state_ctrl = 1;
-	rc = mpxy_write_attrs(mchan->channel_id, SBI_MPXY_ATTR_EVENTS_STATE_CONTROL,
-			      1, &mchan->attrs.events_state_ctrl);
+	rc = sbi_mpxy_write_attrs(mchan->channel_id, SBI_MPXY_ATTR_EVENTS_STATE_CONTROL,
+				  1, &mchan->attrs.events_state_ctrl);
 	if (rc) {
 		dev_err(dev, "enable events state failed for MPXY channel 0x%x\n",
 			mchan->channel_id);
@@ -654,8 +369,8 @@ static void mpxy_mbox_cleanup_events(struct mpxy_mbox_channel *mchan)
 
 	/* Disable channel events state */
 	mchan->attrs.events_state_ctrl = 0;
-	rc = mpxy_write_attrs(mchan->channel_id, SBI_MPXY_ATTR_EVENTS_STATE_CONTROL,
-			      1, &mchan->attrs.events_state_ctrl);
+	rc = sbi_mpxy_write_attrs(mchan->channel_id, SBI_MPXY_ATTR_EVENTS_STATE_CONTROL,
+				  1, &mchan->attrs.events_state_ctrl);
 	if (rc)
 		dev_err(dev, "disable events state failed for MPXY channel 0x%x\n",
 			mchan->channel_id);
@@ -733,8 +448,8 @@ static void mpxy_mbox_msi_write(struct msi_desc *desc, struct msi_msg *msg)
 	minfo->msi_addr_hi = msg->address_hi;
 	minfo->msi_data = msg->data;
 
-	rc = mpxy_write_attrs(mchan->channel_id, SBI_MPXY_ATTR_MSI_ADDR_LO,
-			      sizeof(*minfo) / sizeof(u32), (u32 *)minfo);
+	rc = sbi_mpxy_write_attrs(mchan->channel_id, SBI_MPXY_ATTR_MSI_ADDR_LO,
+				  sizeof(*minfo) / sizeof(u32), (u32 *)minfo);
 	if (rc) {
 		dev_warn(dev, "failed to write MSI info for MPXY channel 0x%x\n",
 			 mchan->channel_id);
@@ -768,7 +483,7 @@ static int mpxy_mbox_populate_channels(struct mpxy_mbox *mbox)
 	int rc;
 
 	/* Find-out of number of channels */
-	rc = mpxy_get_channel_count(&mbox->channel_count);
+	rc = sbi_mpxy_get_channel_count(&mbox->channel_count);
 	if (rc)
 		return dev_err_probe(mbox->dev, rc, "failed to get number of MPXY channels\n");
 	if (!mbox->channel_count)
@@ -778,7 +493,7 @@ static int mpxy_mbox_populate_channels(struct mpxy_mbox *mbox)
 	channel_ids = kcalloc(mbox->channel_count, sizeof(*channel_ids), GFP_KERNEL);
 	if (!channel_ids)
 		return -ENOMEM;
-	rc = mpxy_get_channel_ids(mbox->channel_count, channel_ids);
+	rc = sbi_mpxy_get_channel_ids(mbox->channel_count, channel_ids);
 	if (rc)
 		return dev_err_probe(mbox->dev, rc, "failed to get MPXY channel IDs\n");
 
@@ -792,9 +507,9 @@ static int mpxy_mbox_populate_channels(struct mpxy_mbox *mbox)
 		mchan->mbox = mbox;
 		mchan->channel_id = channel_ids[i];
 
-		rc = mpxy_read_attrs(mchan->channel_id, SBI_MPXY_ATTR_MSG_PROT_ID,
-				     sizeof(mchan->attrs) / sizeof(u32),
-				     (u32 *)&mchan->attrs);
+		rc = sbi_mpxy_read_attrs(mchan->channel_id, SBI_MPXY_ATTR_MSG_PROT_ID,
+					 sizeof(mchan->attrs) / sizeof(u32),
+					 (u32 *)&mchan->attrs);
 		if (rc) {
 			return dev_err_probe(mbox->dev, rc,
 					     "MPXY channel 0x%x read attrs failed\n",
@@ -810,11 +525,11 @@ static int mpxy_mbox_populate_channels(struct mpxy_mbox *mbox)
 			}
 		}
 
-		mchan->notif = devm_kzalloc(mbox->dev, mpxy_shmem_size, GFP_KERNEL);
+		mchan->notif = devm_kzalloc(mbox->dev, sbi_mpxy_shmem_size(), GFP_KERNEL);
 		if (!mchan->notif)
 			return -ENOMEM;
 
-		mchan->max_xfer_len = min(mpxy_shmem_size, mchan->attrs.msg_max_len);
+		mchan->max_xfer_len = min(sbi_mpxy_shmem_size(), mchan->attrs.msg_max_len);
 
 		if ((mchan->attrs.capability & SBI_MPXY_CHAN_CAP_GET_NOTIFICATIONS) &&
 		    (mchan->attrs.capability & SBI_MPXY_CHAN_CAP_EVENTS_STATE))
@@ -839,39 +554,11 @@ static int mpxy_mbox_probe(struct platform_device *pdev)
 	int msi_idx, rc;
 	u32 i;
 
-	/*
-	 * Initialize MPXY shared memory only once. This also ensures
-	 * that SBI MPXY mailbox is probed only once.
-	 */
-	if (mpxy_shmem_init_done) {
-		dev_err(dev, "SBI MPXY mailbox already initialized\n");
-		return -EALREADY;
-	}
-
 	/* Probe for SBI MPXY extension */
-	if (sbi_spec_version < sbi_mk_version(1, 0) ||
-	    sbi_probe_extension(SBI_EXT_MPXY) <= 0) {
+	if (!sbi_mpxy_shmem_size()) {
 		dev_info(dev, "SBI MPXY extension not available\n");
 		return -ENODEV;
 	}
-
-	/* Find-out shared memory size */
-	rc = mpxy_get_shmem_size(&mpxy_shmem_size);
-	if (rc)
-		return dev_err_probe(dev, rc, "failed to get MPXY shared memory size\n");
-
-	/*
-	 * Setup MPXY shared memory on each CPU
-	 *
-	 * Note: Don't cleanup MPXY shared memory upon CPU power-down
-	 * because the RPMI System MSI irqchip driver needs it to be
-	 * available when migrating IRQs in CPU power-down path.
-	 */
-	cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "riscv/sbi-mpxy-shmem",
-			  mpxy_setup_shmem, NULL);
-
-	/* Mark as MPXY shared memory initialization done */
-	mpxy_shmem_init_done = true;
 
 	/* Allocate mailbox instance */
 	mbox = devm_kzalloc(dev, sizeof(*mbox), GFP_KERNEL);
