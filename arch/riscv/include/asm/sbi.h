@@ -685,6 +685,37 @@ static inline int sbi_fwft_set_online_cpus(u32 feature, unsigned long value,
 	return sbi_fwft_set_cpumask(cpu_online_mask, feature, value, flags);
 }
 
+/* SBI MPXY notification data in shared memory */
+struct sbi_mpxy_notification_data {
+	/* Remaining number of notification events */
+	__le32 remaining;
+	/* Number of notification events returned */
+	__le32 returned;
+	/* Number of notification events lost */
+	__le32 lost;
+	/* Reserved for future use */
+	__le32 reserved;
+	/* Returned channel id array */
+	u8 events_data[];
+};
+
+unsigned long sbi_mpxy_shmem_size(void);
+int sbi_mpxy_get_channel_count(u32 *channel_count);
+int sbi_mpxy_get_channel_ids(u32 channel_count, u32 *channel_ids);
+int sbi_mpxy_read_attrs(u32 channel_id, u32 base_attrid, u32 attr_count,
+			u32 *attrs_buf);
+int sbi_mpxy_write_attrs(u32 channel_id, u32 base_attrid, u32 attr_count,
+			 u32 *attrs_buf);
+int sbi_mpxy_send_message_with_resp(u32 channel_id, u32 msg_id,
+				    void *tx, unsigned long tx_len,
+				    void *rx, unsigned long max_rx_len,
+				    unsigned long *rx_len);
+int sbi_mpxy_send_message_without_resp(u32 channel_id, u32 msg_id,
+				       void *tx, unsigned long tx_len);
+int sbi_mpxy_get_notifications(u32 channel_id,
+			       struct sbi_mpxy_notification_data *notif_data,
+			       unsigned long *events_data_len);
+
 /* Check if current SBI specification version is 0.1 or not */
 static inline int sbi_spec_is_0_1(void)
 {
@@ -746,7 +777,58 @@ int sbi_debug_console_read(char *bytes, unsigned int num_bytes);
 
 #else /* CONFIG_RISCV_SBI */
 static inline int sbi_remote_fence_i(const struct cpumask *cpu_mask) { return -1; }
-static inline void sbi_init(void) {}
+static inline void sbi_init(void)
+{
+}
+
+static inline unsigned long sbi_mpxy_shmem_size(void)
+{
+	return 0;
+}
+
+static inline int sbi_mpxy_get_channel_count(u32 *channel_count)
+{
+	return -ENODEV;
+}
+
+static inline int sbi_mpxy_get_channel_ids(u32 channel_count, u32 *channel_ids)
+{
+	return -ENODEV;
+}
+
+int sbi_mpxy_read_attrs(u32 channel_id, u32 base_attrid, u32 attr_count,
+			u32 *attrs_buf)
+{
+	return -ENODEV;
+}
+
+int sbi_mpxy_write_attrs(u32 channel_id, u32 base_attrid, u32 attr_count,
+			 u32 *attrs_buf)
+{
+	return -ENODEV;
+}
+
+int sbi_mpxy_send_message_with_resp(u32 channel_id, u32 msg_id,
+				    void *tx, unsigned long tx_len,
+				    void *rx, unsigned long max_rx_len,
+				    unsigned long *rx_len)
+{
+	return -ENODEV;
+}
+
+int sbi_mpxy_send_message_without_resp(u32 channel_id, u32 msg_id,
+				       void *tx, unsigned long tx_len)
+{
+	return -ENODEV;
+}
+
+int sbi_mpxy_get_notifications(u32 channel_id,
+			       struct sbi_mpxy_notification_data *notif_data,
+			       unsigned long *events_data_len)
+{
+	return -ENODEV;
+}
+
 #endif /* CONFIG_RISCV_SBI */
 
 unsigned long riscv_get_mvendorid(void);
