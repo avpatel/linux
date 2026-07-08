@@ -30,6 +30,11 @@ struct kvm_gstage_mapping {
 #define kvm_riscv_gstage_index_bits	10
 #endif
 
+#define kvm_riscv_gstage_level_to_page_order(__level)	\
+	(12 + ((__level) * kvm_riscv_gstage_index_bits))
+#define kvm_riscv_gstage_level_to_page_size(__level)	\
+	BIT(kvm_riscv_gstage_level_to_page_order(__level))
+
 extern unsigned long kvm_riscv_gstage_max_pgd_levels;
 
 #define kvm_riscv_gstage_pgd_xbits	2
