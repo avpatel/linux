@@ -61,21 +61,17 @@ static int gstage_level_to_page_order(struct kvm_gstage *gstage, u32 level,
 	if (gstage->pgd_levels < level)
 		return -EINVAL;
 
-	*out_pgorder = 12 + (level * kvm_riscv_gstage_index_bits);
+	*out_pgorder = kvm_riscv_gstage_level_to_page_order(level);
 	return 0;
 }
 
 static int gstage_level_to_page_size(struct kvm_gstage *gstage, u32 level,
 				     unsigned long *out_pgsize)
 {
-	int rc;
-	unsigned long page_order = PAGE_SHIFT;
+	if (gstage->pgd_levels < level)
+		return -EINVAL;
 
-	rc = gstage_level_to_page_order(gstage, level, &page_order);
-	if (rc)
-		return rc;
-
-	*out_pgsize = BIT(page_order);
+	*out_pgsize = kvm_riscv_gstage_level_to_page_size(level);
 	return 0;
 }
 
