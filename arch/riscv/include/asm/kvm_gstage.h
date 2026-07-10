@@ -52,6 +52,8 @@ static inline gpa_t kvm_riscv_gstage_gpa_size(unsigned long pgd_levels)
 	return BIT_ULL(kvm_riscv_gstage_gpa_bits(pgd_levels));
 }
 
+unsigned long kvm_riscv_gstage_pte_index(unsigned long pgd_levels, gpa_t addr, u32 level);
+
 bool kvm_riscv_gstage_get_leaf(struct kvm_gstage *gstage, gpa_t addr,
 			       pte_t **ptepp, u32 *ptep_level);
 

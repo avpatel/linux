@@ -20,13 +20,12 @@ unsigned long kvm_riscv_gstage_max_pgd_levels __ro_after_init = 2;
 #define gstage_pte_leaf(__ptep)	\
 	(pte_val(*(__ptep)) & (_PAGE_READ | _PAGE_WRITE | _PAGE_EXEC))
 
-static inline unsigned long gstage_pte_index(struct kvm_gstage *gstage,
-					     gpa_t addr, u32 level)
+unsigned long kvm_riscv_gstage_pte_index(unsigned long pgd_levels, gpa_t addr, u32 level)
 {
 	unsigned long mask;
 	unsigned long shift = HGATP_PAGE_SHIFT + (kvm_riscv_gstage_index_bits * level);
 
-	if (level == gstage->pgd_levels - 1)
+	if (level == pgd_levels - 1)
 		mask = (PTRS_PER_PTE * (1UL << kvm_riscv_gstage_pgd_xbits)) - 1;
 	else
 		mask = PTRS_PER_PTE - 1;
@@ -79,23 +78,26 @@ bool kvm_riscv_gstage_get_leaf(struct kvm_gstage *gstage, gpa_t addr,
 			       pte_t **ptepp, u32 *ptep_level)
 {
 	pte_t *ptep;
-	u32 current_level = gstage->pgd_levels - 1;
+	unsigned long idx;
+	u32 curr_level = gstage->pgd_levels - 1;
 
-	*ptep_level = current_level;
+	*ptep_level = curr_level;
 	ptep = (pte_t *)gstage->pgd;
-	ptep = &ptep[gstage_pte_index(gstage, addr, current_level)];
+	idx = kvm_riscv_gstage_pte_index(gstage->pgd_levels, addr, curr_level);
+	ptep = &ptep[idx];
 	while (ptep && pte_val(ptep_get(ptep))) {
 		if (gstage_pte_leaf(ptep)) {
-			*ptep_level = current_level;
+			*ptep_level = curr_level;
 			*ptepp = ptep;
 			return true;
 		}
 
-		if (current_level) {
-			current_level--;
-			*ptep_level = current_level;
+		if (curr_level) {
+			curr_level--;
+			*ptep_level = curr_level;
 			ptep = (pte_t *)gstage_pte_page_vaddr(ptep_get(ptep));
-			ptep = &ptep[gstage_pte_index(gstage, addr, current_level)];
+			idx = kvm_riscv_gstage_pte_index(gstage->pgd_levels, addr, curr_level);
+			ptep = &ptep[idx];
 		} else {
 			ptep = NULL;
 		}
@@ -137,14 +139,15 @@ int kvm_riscv_gstage_set_pte(struct kvm_gstage *gstage,
 			     struct kvm_mmu_memory_cache *pcache,
 			     const struct kvm_gstage_mapping *map)
 {
-	u32 current_level = gstage->pgd_levels - 1;
+	u32 curr_level = gstage->pgd_levels - 1;
+	unsigned long idx = kvm_riscv_gstage_pte_index(gstage->pgd_levels, map->addr, curr_level);
 	pte_t *next_ptep = (pte_t *)gstage->pgd;
-	pte_t *ptep = &next_ptep[gstage_pte_index(gstage, map->addr, current_level)];
+	pte_t *ptep = &next_ptep[idx];
 
-	if (current_level < map->level)
+	if (curr_level < map->level)
 		return -EINVAL;
 
-	while (current_level != map->level) {
+	while (curr_level != map->level) {
 		if (gstage_pte_leaf(ptep))
 			return -EEXIST;
 
@@ -162,14 +165,15 @@ int kvm_riscv_gstage_set_pte(struct kvm_gstage *gstage,
 			next_ptep = (pte_t *)gstage_pte_page_vaddr(ptep_get(ptep));
 		}
 
-		current_level--;
-		ptep = &next_ptep[gstage_pte_index(gstage, map->addr, current_level)];
+		curr_level--;
+		idx = kvm_riscv_gstage_pte_index(gstage->pgd_levels, map->addr, curr_level);
+		ptep = &next_ptep[idx];
 	}
 
 	if (pte_val(*ptep) != pte_val(map->pte)) {
 		set_pte(ptep, map->pte);
 		if (gstage_pte_leaf(ptep))
-			gstage_tlb_flush(gstage, current_level, map->addr);
+			gstage_tlb_flush(gstage, curr_level, map->addr);
 	}
 
 	return 0;
@@ -302,31 +306,31 @@ int kvm_riscv_gstage_split_huge(struct kvm_gstage *gstage,
 				struct kvm_mmu_memory_cache *pcache,
 				gpa_t addr, u32 target_level, bool flush)
 {
-	u32 current_level = gstage->pgd_levels - 1;
+	unsigned long huge_pte, child_pte, child_page_size, idx;
+	u32 curr_level = gstage->pgd_levels - 1;
 	pte_t *next_ptep = (pte_t *)gstage->pgd;
-	unsigned long huge_pte, child_pte;
-	unsigned long child_page_size;
 	pte_t *ptep;
 	int i, ret;
 
 	if (!pcache)
 		return -ENOMEM;
 
-	while(current_level > target_level) {
-		ptep = (pte_t *)&next_ptep[gstage_pte_index(gstage, addr, current_level)];
+	while(curr_level > target_level) {
+		idx = kvm_riscv_gstage_pte_index(gstage->pgd_levels, addr, curr_level);
+		ptep = (pte_t *)&next_ptep[idx];
 
 		if (!pte_val(ptep_get(ptep)))
 			break;
 
 		if (!gstage_pte_leaf(ptep)) {
 			next_ptep = (pte_t *)gstage_pte_page_vaddr(ptep_get(ptep));
-			current_level--;
+			curr_level--;
 			continue;
 		}
 
 		huge_pte = pte_val(ptep_get(ptep));
 
-		ret = gstage_level_to_page_size(gstage, current_level - 1, &child_page_size);
+		ret = gstage_level_to_page_size(gstage, curr_level - 1, &child_page_size);
 		if (ret)
 			return ret;
 
@@ -343,9 +347,9 @@ int kvm_riscv_gstage_split_huge(struct kvm_gstage *gstage,
 				__pgprot(_PAGE_TABLE)));
 
 		if (flush)
-			gstage_tlb_flush(gstage, current_level, addr);
+			gstage_tlb_flush(gstage, curr_level, addr);
 
-		current_level--;
+		curr_level--;
 	}
 
 	return 0;
