@@ -371,8 +371,7 @@ int kvm_riscv_vcpu_virtual_insn(struct kvm_vcpu *vcpu, struct kvm_run *run,
  * Returns < 0 to report failure and exit run-loop
  */
 int kvm_riscv_vcpu_mmio_load(struct kvm_vcpu *vcpu, struct kvm_run *run,
-			     unsigned long fault_addr,
-			     unsigned long htinst)
+			     gpa_t fault_addr, unsigned long htinst)
 {
 	u8 data_buf[8];
 	unsigned long insn;
@@ -494,8 +493,7 @@ int kvm_riscv_vcpu_mmio_load(struct kvm_vcpu *vcpu, struct kvm_run *run,
  * Returns < 0 to report failure and exit run-loop
  */
 int kvm_riscv_vcpu_mmio_store(struct kvm_vcpu *vcpu, struct kvm_run *run,
-			      unsigned long fault_addr,
-			      unsigned long htinst)
+			      gpa_t fault_addr, unsigned long htinst)
 {
 	u8 data8;
 	u16 data16;
