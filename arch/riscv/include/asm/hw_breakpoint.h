@@ -14,6 +14,7 @@ struct task_struct;
 
 /* Maximum number of hardware breakpoints supported */
 #define RISCV_HW_BP_NUM_MAX 32
+#define RISCV_MAX_BP		16
 
 #if __riscv_xlen == 64
 #define cpu_to_le cpu_to_le64
@@ -256,6 +257,10 @@ struct arch_hw_breakpoint {
 	unsigned long address;
 	unsigned long len;
 	unsigned int type;
+	unsigned int match;
+	unsigned int chain;
+	unsigned int select;
+	unsigned int time;
 
 	/* Trigger configuration data */
 	unsigned long tdata1;
@@ -282,8 +287,13 @@ void arch_disable_hw_breakpoint(struct perf_event *bp);
 int arch_install_hw_breakpoint(struct perf_event *bp);
 void arch_uninstall_hw_breakpoint(struct perf_event *bp);
 void hw_breakpoint_pmu_read(struct perf_event *bp);
+void clear_ptrace_hw_breakpoint(struct task_struct *tsk);
+void flush_ptrace_hw_breakpoint(struct task_struct *tsk);
+void ptrace_hw_copy_thread(struct task_struct *task);
 
 #else
+
+static inline void ptrace_hw_copy_thread(struct task_struct *task) { }
 
 #endif /* CONFIG_HAVE_HW_BREAKPOINT */
 #endif /* __RISCV_HW_BREAKPOINT_H */
