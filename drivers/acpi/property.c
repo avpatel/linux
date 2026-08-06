@@ -68,6 +68,7 @@ static const guid_t buffer_prop_guid =
 	GUID_INIT(0xedb12dd0, 0x363d, 0x4085,
 		  0xa3, 0xd2, 0x49, 0x52, 0x2c, 0xa1, 0x60, 0xc4);
 
+static void acpi_free_device_properties(struct list_head *list);
 static bool acpi_enumerate_nondev_subnodes(acpi_handle scope,
 					   union acpi_object *desc,
 					   struct acpi_device_data *data,
@@ -75,6 +76,11 @@ static bool acpi_enumerate_nondev_subnodes(acpi_handle scope,
 static bool acpi_extract_properties(acpi_handle handle,
 				    union acpi_object *desc,
 				    struct acpi_device_data *data);
+
+/* ACPI _DSD device graph GUID [1]: ab02a46b-74c7-45a2-bd68-f7d344ef2153 */
+static const guid_t graph_prop_guid =
+	GUID_INIT(0xab02a46b, 0x74c7, 0x45a2,
+		  0xbd, 0x68, 0xf7, 0xd3, 0x44, 0xef, 0x21, 0x53);
 
 static bool acpi_nondev_subnode_extract(union acpi_object *desc,
 					acpi_handle handle,
@@ -254,14 +260,316 @@ static bool acpi_add_nondev_subnodes(acpi_handle scope,
 	return ret;
 }
 
-static bool acpi_enumerate_nondev_subnodes(acpi_handle scope,
-					   union acpi_object *desc,
-					   struct acpi_device_data *data,
-					   struct fwnode_handle *parent)
+static struct acpi_data_node *
+acpi_data_node_create(const char *name, acpi_handle scope,
+		      struct fwnode_handle *parent, struct list_head *list)
 {
+	struct acpi_data_node *dn;
+	union acpi_object *marker;
+
+	/*
+	 * Synthetic nodes have no backing _DSD-equivalent package of their
+	 * own, but data->pointer is used elsewhere as an indication that a
+	 * node's data is valid, so give it a dummy non-NULL object to own
+	 * and free, the same way acpi_nondev_subnode_extract() and
+	 * acpi_extract_apple_properties() do for their allocated buffers.
+	 */
+	marker = ACPI_ALLOCATE_ZEROED(sizeof(*marker));
+	if (!marker)
+		return NULL;
+
+	dn = kzalloc_obj(*dn);
+	if (!dn) {
+		ACPI_FREE(marker);
+		return NULL;
+	}
+
+	dn->name = name;
+	dn->handle = scope;
+	dn->parent = parent;
+	dn->data.pointer = marker;
+	fwnode_init(&dn->fwnode, &acpi_data_fwnode_ops);
+	INIT_LIST_HEAD(&dn->data.properties);
+	INIT_LIST_HEAD(&dn->data.subnodes);
+	list_add_tail(&dn->sibling, list);
+
+	return dn;
+}
+
+static void acpi_data_node_drop(struct acpi_data_node *dn)
+{
+	list_del(&dn->sibling);
+	acpi_free_device_properties(&dn->data.properties);
+	ACPI_FREE((void *)dn->data.pointer);
+	kfree(dn);
+}
+
+static bool acpi_data_prop_add_integer(struct acpi_device_data *data,
+			       const char *name, u64 value)
+{
+	struct acpi_device_properties *props;
+	union acpi_object *obj;
+
+	props = kzalloc(sizeof(*props) + 4 * sizeof(*obj), GFP_KERNEL);
+	if (!props)
+		return false;
+
+	INIT_LIST_HEAD(&props->list);
+	props->guid = &prp_guids[0];
+
+	obj = (union acpi_object *)(props + 1);
+	props->properties = &obj[0];
+	obj[0].type = ACPI_TYPE_PACKAGE;
+	obj[0].package.count = 1;
+	obj[0].package.elements = &obj[1];
+
+	obj[1].type = ACPI_TYPE_PACKAGE;
+	obj[1].package.count = 2;
+	obj[1].package.elements = &obj[2];
+
+	obj[2].type = ACPI_TYPE_STRING;
+	obj[2].string.pointer = (char *)name;
+	obj[2].string.length = strlen(name);
+
+	obj[3].type = ACPI_TYPE_INTEGER;
+	obj[3].integer.value = value;
+
+	list_add_tail(&props->list, &data->properties);
+
+	return true;
+}
+
+static bool acpi_data_prop_add_remote_endpoint(struct acpi_device_data *data,
+				       const union acpi_object *remote,
+				       u32 port, u32 endpoint)
+{
+	struct acpi_device_properties *props;
+	union acpi_object *obj;
+
+	if (remote->type != ACPI_TYPE_LOCAL_REFERENCE &&
+	    remote->type != ACPI_TYPE_STRING)
+		return false;
+
+	props = kzalloc(sizeof(*props) + 7 * sizeof(*obj), GFP_KERNEL);
+	if (!props)
+		return false;
+
+	INIT_LIST_HEAD(&props->list);
+	props->guid = &prp_guids[0];
+
+	obj = (union acpi_object *)(props + 1);
+	props->properties = &obj[0];
+	obj[0].type = ACPI_TYPE_PACKAGE;
+	obj[0].package.count = 1;
+	obj[0].package.elements = &obj[1];
+
+	obj[1].type = ACPI_TYPE_PACKAGE;
+	obj[1].package.count = 2;
+	obj[1].package.elements = &obj[2];
+
+	obj[2].type = ACPI_TYPE_STRING;
+	obj[2].string.pointer = "remote-endpoint";
+	obj[2].string.length = strlen("remote-endpoint");
+
+	obj[3].type = ACPI_TYPE_PACKAGE;
+	obj[3].package.count = 3;
+	obj[3].package.elements = &obj[4];
+
+	obj[4] = *remote;
+
+	obj[5].type = ACPI_TYPE_INTEGER;
+	obj[5].integer.value = port;
+
+	obj[6].type = ACPI_TYPE_INTEGER;
+	obj[6].integer.value = endpoint;
+
+	list_add_tail(&props->list, &data->properties);
+
+	return true;
+}
+
+struct acpi_graph_port_map {
+	struct list_head node;
+	struct acpi_data_node *port;
+	struct fwnode_handle *parent;
+	u32 port_nr;
+	u32 endpoint_id;
+};
+
+static struct acpi_graph_port_map *
+acpi_graph_get_port_map(struct list_head *ports, acpi_handle scope,
+			struct fwnode_handle *parent, struct list_head *subnodes,
+			u32 port_nr)
+{
+	struct acpi_graph_port_map *entry;
+
+	list_for_each_entry(entry, ports, node) {
+		if (entry->parent == parent && entry->port_nr == port_nr)
+			return entry;
+	}
+
+	entry = kzalloc_obj(*entry);
+	if (!entry)
+		return NULL;
+
+	entry->port = acpi_data_node_create("port", scope, parent, subnodes);
+	if (!entry->port)
+		goto err_free_entry;
+
+	entry->parent = parent;
+	entry->port_nr = port_nr;
+	if (!acpi_data_prop_add_integer(&entry->port->data, "reg", port_nr) ||
+	    !acpi_data_prop_add_integer(&entry->port->data, "port", port_nr))
+		goto err_drop_port;
+
+	list_add_tail(&entry->node, ports);
+
+	return entry;
+
+err_drop_port:
+	acpi_data_node_drop(entry->port);
+err_free_entry:
+	kfree(entry);
+	return NULL;
+}
+
+static bool acpi_dsd_graph_valid(union acpi_object *graph)
+{
+	u64 nr_graphs;
+	u64 i;
+
+	if (graph->type != ACPI_TYPE_PACKAGE)
+		return false;
+
+	if (graph->package.count < 2)
+		return false;
+
+	if (graph->package.elements[0].type != ACPI_TYPE_INTEGER ||
+	    graph->package.elements[1].type != ACPI_TYPE_INTEGER)
+		return false;
+
+	if (graph->package.elements[0].integer.value != 0)
+		return false;
+
+	nr_graphs = graph->package.elements[1].integer.value;
+	if (nr_graphs > graph->package.count - 2)
+		return false;
+
+	for (i = 0; i < nr_graphs; i++) {
+		union acpi_object *graph_entry;
+		u64 nr_links;
+
+		graph_entry = &graph->package.elements[i + 2];
+		if (graph_entry->type != ACPI_TYPE_PACKAGE ||
+		    graph_entry->package.count < 3)
+			return false;
+
+		if (graph_entry->package.elements[0].type != ACPI_TYPE_INTEGER ||
+		    graph_entry->package.elements[1].type != ACPI_TYPE_BUFFER ||
+		    graph_entry->package.elements[1].buffer.length != 16 ||
+		    graph_entry->package.elements[2].type != ACPI_TYPE_INTEGER)
+			return false;
+
+		nr_links = graph_entry->package.elements[2].integer.value;
+		if (nr_links > graph_entry->package.count - 3)
+			return false;
+	}
+
+	return true;
+}
+
+static bool acpi_add_graph_subnodes(acpi_handle scope, union acpi_object *graph,
+				    struct acpi_device_data *data,
+				    struct fwnode_handle *parent)
+{
+	LIST_HEAD(ports);
+	u64 nr_graphs;
+	bool ret = false;
+	u64 i;
+
+	if (!acpi_dsd_graph_valid(graph))
+		return false;
+
+	nr_graphs = graph->package.elements[1].integer.value;
+
+	for (i = 0; i < nr_graphs; i++) {
+		union acpi_object *graph_entry;
+		u64 nr_links;
+		u64 j;
+
+		graph_entry = &graph->package.elements[i + 2];
+		nr_links = graph_entry->package.elements[2].integer.value;
+
+		for (j = 0; j < nr_links; j++) {
+			union acpi_object *link;
+			struct acpi_graph_port_map *port_map;
+			struct acpi_data_node *endpoint;
+			union acpi_object *elem;
+			u32 src_port, dst_port, ep_id;
+
+			link = &graph_entry->package.elements[j + 3];
+			if (link->type != ACPI_TYPE_PACKAGE ||
+			    link->package.count < 3)
+				continue;
+
+			elem = link->package.elements;
+			if (elem[0].type != ACPI_TYPE_INTEGER ||
+			    elem[1].type != ACPI_TYPE_INTEGER ||
+			    (elem[2].type != ACPI_TYPE_LOCAL_REFERENCE &&
+			     elem[2].type != ACPI_TYPE_STRING))
+				continue;
+
+			src_port = elem[0].integer.value;
+			dst_port = elem[1].integer.value;
+
+			port_map = acpi_graph_get_port_map(&ports, scope, parent,
+						   &data->subnodes, src_port);
+			if (!port_map)
+				continue;
+
+			ep_id = port_map->endpoint_id++;
+			endpoint = acpi_data_node_create("endpoint", scope,
+						 &port_map->port->fwnode,
+						 &port_map->port->data.subnodes);
+			if (!endpoint)
+				continue;
+
+			if (!acpi_data_prop_add_integer(&endpoint->data, "reg", ep_id) ||
+			    !acpi_data_prop_add_integer(&endpoint->data, "endpoint", ep_id) ||
+			    !acpi_data_prop_add_remote_endpoint(&endpoint->data, &elem[2],
+							dst_port, 0)) {
+				acpi_data_node_drop(endpoint);
+				continue;
+			}
+
+			ret = true;
+		}
+	}
+
+	while (!list_empty(&ports)) {
+		struct acpi_graph_port_map *port_map;
+
+		port_map = list_first_entry(&ports, struct acpi_graph_port_map, node);
+		list_del(&port_map->node);
+
+		if (!ret || list_empty(&port_map->port->data.subnodes))
+			acpi_data_node_drop(port_map->port);
+
+		kfree(port_map);
+	}
+
+	return ret;
+}
+
+static bool acpi_enumerate_nondev_subnodes(acpi_handle scope,
+				   union acpi_object *desc,
+				   struct acpi_device_data *data,
+				   struct fwnode_handle *parent)
+{
+	bool ret = false;
 	int i;
 
-	/* Look for the ACPI data subnodes GUID. */
+	/* Look for the ACPI data subnodes and graph UUIDs. */
 	for (i = 0; i < desc->package.count; i += 2) {
 		const union acpi_object *guid;
 		union acpi_object *links;
@@ -278,14 +586,17 @@ static bool acpi_enumerate_nondev_subnodes(acpi_handle scope,
 		    links->type != ACPI_TYPE_PACKAGE)
 			break;
 
-		if (!guid_equal((guid_t *)guid->buffer.pointer, &ads_guid))
+		if (guid_equal((guid_t *)guid->buffer.pointer, &ads_guid)) {
+			ret |= acpi_add_nondev_subnodes(scope, links,
+						&data->subnodes, parent);
 			continue;
+		}
 
-		return acpi_add_nondev_subnodes(scope, links, &data->subnodes,
-						parent);
+		if (guid_equal((guid_t *)guid->buffer.pointer, &graph_prop_guid))
+			ret |= acpi_add_graph_subnodes(scope, links, data, parent);
 	}
 
-	return false;
+	return ret;
 }
 
 static bool acpi_property_value_ok(const union acpi_object *value)
