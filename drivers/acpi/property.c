@@ -81,6 +81,13 @@ static bool acpi_extract_properties(acpi_handle handle,
 static const guid_t graph_prop_guid =
 	GUID_INIT(0xab02a46b, 0x74c7, 0x45a2,
 		  0xbd, 0x68, 0xf7, 0xd3, 0x44, 0xef, 0x21, 0x53);
+/* RISC-V Trace ACPI Graph UUID: 42e66f8f-50fe-4eed-9897-cdeed26ecd77 */
+static const guid_t rvtrace_graph_guid =
+	GUID_INIT(0x42e66f8f, 0x50fe, 0x4eed,
+		  0x98, 0x97, 0xcd, 0xee, 0xd2, 0x6e, 0xcd, 0x77);
+
+#define ACPI_GRAPH_LINK_SLAVE	0
+#define ACPI_GRAPH_LINK_MASTER	1
 
 static bool acpi_nondev_subnode_extract(union acpi_object *desc,
 					acpi_handle handle,
@@ -396,6 +403,42 @@ struct acpi_graph_port_map {
 	u32 endpoint_id;
 };
 
+struct acpi_graph_root_map {
+	struct list_head node;
+	struct acpi_data_node *root;
+};
+
+static bool acpi_graph_is_directional(const guid_t *graph_guid)
+{
+	return guid_equal(graph_guid, &rvtrace_graph_guid);
+}
+
+static struct acpi_data_node *
+acpi_graph_get_root_node(struct list_head *roots, acpi_handle scope,
+			 struct fwnode_handle *parent, struct list_head *subnodes,
+			 const char *name)
+{
+	struct acpi_graph_root_map *entry;
+
+	list_for_each_entry(entry, roots, node) {
+		if (!strcmp(entry->root->name, name))
+			return entry->root;
+	}
+
+	entry = kzalloc_obj(*entry);
+	if (!entry)
+		return NULL;
+
+	entry->root = acpi_data_node_create(name, scope, parent, subnodes);
+	if (!entry->root) {
+		kfree(entry);
+		return NULL;
+	}
+
+	list_add_tail(&entry->node, roots);
+	return entry->root;
+}
+
 static struct acpi_graph_port_map *
 acpi_graph_get_port_map(struct list_head *ports, acpi_handle scope,
 			struct fwnode_handle *parent, struct list_head *subnodes,
@@ -483,6 +526,7 @@ static bool acpi_add_graph_subnodes(acpi_handle scope, union acpi_object *graph,
 				    struct fwnode_handle *parent)
 {
 	LIST_HEAD(ports);
+	LIST_HEAD(roots);
 	u64 nr_graphs;
 	bool ret = false;
 	u64 i;
@@ -494,10 +538,15 @@ static bool acpi_add_graph_subnodes(acpi_handle scope, union acpi_object *graph,
 
 	for (i = 0; i < nr_graphs; i++) {
 		union acpi_object *graph_entry;
+		struct fwnode_handle *graph_parent = parent;
+		struct list_head *graph_subnodes = &data->subnodes;
+		struct acpi_data_node *graph_root;
+		const guid_t *graph_guid;
 		u64 nr_links;
 		u64 j;
 
 		graph_entry = &graph->package.elements[i + 2];
+		graph_guid = (const guid_t *)graph_entry->package.elements[1].buffer.pointer;
 		nr_links = graph_entry->package.elements[2].integer.value;
 
 		for (j = 0; j < nr_links; j++) {
@@ -506,6 +555,7 @@ static bool acpi_add_graph_subnodes(acpi_handle scope, union acpi_object *graph,
 			struct acpi_data_node *endpoint;
 			union acpi_object *elem;
 			u32 src_port, dst_port, ep_id;
+			u64 dir;
 
 			link = &graph_entry->package.elements[j + 3];
 			if (link->type != ACPI_TYPE_PACKAGE ||
@@ -522,8 +572,34 @@ static bool acpi_add_graph_subnodes(acpi_handle scope, union acpi_object *graph,
 			src_port = elem[0].integer.value;
 			dst_port = elem[1].integer.value;
 
-			port_map = acpi_graph_get_port_map(&ports, scope, parent,
-						   &data->subnodes, src_port);
+			if (acpi_graph_is_directional(graph_guid)) {
+				if (link->package.count < 4 ||
+				    elem[3].type != ACPI_TYPE_INTEGER)
+					continue;
+
+				dir = elem[3].integer.value;
+				if (dir == ACPI_GRAPH_LINK_MASTER)
+					graph_root = acpi_graph_get_root_node(&roots, scope,
+							      parent,
+							      &data->subnodes,
+							      "out-ports");
+				else if (dir == ACPI_GRAPH_LINK_SLAVE)
+					graph_root = acpi_graph_get_root_node(&roots, scope,
+							      parent,
+							      &data->subnodes,
+							      "in-ports");
+				else
+					continue;
+
+				if (!graph_root)
+					continue;
+
+				graph_parent = &graph_root->fwnode;
+				graph_subnodes = &graph_root->data.subnodes;
+			}
+
+			port_map = acpi_graph_get_port_map(&ports, scope, graph_parent,
+						   graph_subnodes, src_port);
 			if (!port_map)
 				continue;
 
@@ -556,6 +632,18 @@ static bool acpi_add_graph_subnodes(acpi_handle scope, union acpi_object *graph,
 			acpi_data_node_drop(port_map->port);
 
 		kfree(port_map);
+	}
+
+	while (!list_empty(&roots)) {
+		struct acpi_graph_root_map *root;
+
+		root = list_first_entry(&roots, struct acpi_graph_root_map, node);
+		list_del(&root->node);
+
+		if (!ret || list_empty(&root->root->data.subnodes))
+			acpi_data_node_drop(root->root);
+
+		kfree(root);
 	}
 
 	return ret;
