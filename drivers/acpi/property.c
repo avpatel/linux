@@ -1960,6 +1960,51 @@ static struct fwnode_handle *acpi_graph_get_child_prop_value(
 	return NULL;
 }
 
+static struct fwnode_handle *
+acpi_graph_get_first_endpoint(struct fwnode_handle *port)
+{
+	struct fwnode_handle *endpoint = NULL;
+
+	do {
+		endpoint = acpi_get_next_subnode(port, endpoint);
+	} while (endpoint && !is_acpi_graph_node(endpoint, "endpoint"));
+
+	return endpoint;
+}
+
+/**
+ * acpi_graph_get_remote_directional_port - Find a port nested under a
+ * synthetic "in-ports"/"out-ports" root node
+ * @fwnode: device fwnode
+ * @port_nr: the desired port number
+ *
+ * Directional Device Graph UUIDs (e.g. the RISC-V Trace ACPI Graph UUID)
+ * cause acpi_add_graph_subnodes() to nest port nodes one level deeper than
+ * usual, under a synthetic "in-ports" or "out-ports" node. Look for @port_nr
+ * under either of those, since the direction of the remote link is not known
+ * to the caller.
+ *
+ * Return: the port node on success, NULL otherwise.
+ */
+static struct fwnode_handle *
+acpi_graph_get_remote_directional_port(struct fwnode_handle *fwnode,
+				       unsigned int port_nr)
+{
+	struct fwnode_handle *ports_node, *port;
+
+	ports_node = acpi_fwnode_get_named_child_node(fwnode, "in-ports");
+	if (ports_node) {
+		port = acpi_graph_get_child_prop_value(ports_node, "port", port_nr);
+		if (port)
+			return port;
+	}
+
+	ports_node = acpi_fwnode_get_named_child_node(fwnode, "out-ports");
+	if (ports_node)
+		return acpi_graph_get_child_prop_value(ports_node, "port", port_nr);
+
+	return NULL;
+}
 
 /**
  * acpi_graph_get_remote_endpoint - Parses and returns remote end of an endpoint
@@ -1996,9 +2041,24 @@ acpi_graph_get_remote_endpoint(const struct fwnode_handle *__fwnode)
 	port_nr = args.args[0];
 	endpoint_nr = args.args[1];
 
-	fwnode = acpi_graph_get_child_prop_value(fwnode, "port", port_nr);
+	/*
+	 * For directional Device Graph UUIDs (e.g. the RISC-V Trace ACPI
+	 * Graph UUID), acpi_add_graph_subnodes() nests the port nodes one
+	 * level deeper, under a synthetic "in-ports"/"out-ports" node,
+	 * instead of directly under the device. Since the direction of the
+	 * remote link is not known here, look in both places.
+	 */
+	fwnode = acpi_graph_get_child_prop_value(fwnode, "port", port_nr) ?:
+		 acpi_graph_get_remote_directional_port(fwnode, port_nr);
+	if (!fwnode)
+		return NULL;
 
-	return acpi_graph_get_child_prop_value(fwnode, "endpoint", endpoint_nr);
+	/*
+	 * Device Graph UUID links may not provide endpoint IDs. In that case
+	 * return the first endpoint under the remote port.
+	 */
+	return acpi_graph_get_child_prop_value(fwnode, "endpoint", endpoint_nr) ?:
+	       acpi_graph_get_first_endpoint(fwnode);
 }
 
 static bool acpi_fwnode_device_is_available(const struct fwnode_handle *fwnode)
