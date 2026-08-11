@@ -3,6 +3,7 @@
  * Copyright (c) 2026 Qualcomm Technologies, Inc.
  */
 
+#include <linux/acpi.h>
 #include <linux/device.h>
 #include <linux/gtrace.h>
 #include <linux/io.h>
@@ -169,6 +170,62 @@ static int rvtrace_parse_inconns(struct gtrace_platform_data *pdata)
 	return ret;
 }
 
+#ifdef CONFIG_ACPI
+#include <acpi/processor.h>
+
+static const struct acpi_device_id rvtrace_platform_acpi_match[] = {
+	{ "RSCV0007", 0 },
+	{}
+};
+MODULE_DEVICE_TABLE(acpi, rvtrace_platform_acpi_match);
+
+/*
+ * acpi_handle_to_logical_cpuid - Map a given acpi_handle to the
+ * logical CPU id of the corresponding CPU device.
+ *
+ * Returns the logical CPU id when found. Otherwise returns >= nr_cpus_id.
+ */
+static int acpi_handle_to_logical_cpuid(acpi_handle handle)
+{
+	struct acpi_processor *pr;
+	int i;
+
+	for_each_possible_cpu(i) {
+		pr = per_cpu(processors, i);
+		if (pr && pr->handle == handle)
+			break;
+	}
+
+	return i;
+}
+
+static int acpi_rvtrace_get_cpu(struct device *dev)
+{
+	struct acpi_device *adev = ACPI_COMPANION(dev);
+	acpi_handle cpu_handle;
+	acpi_status status;
+	int cpu;
+
+	if (!adev)
+		return -ENODEV;
+
+	status = acpi_get_parent(adev->handle, &cpu_handle);
+	if (ACPI_FAILURE(status))
+		return -ENODEV;
+
+	cpu = acpi_handle_to_logical_cpuid(cpu_handle);
+	if (cpu >= nr_cpu_ids)
+		return -ENODEV;
+
+	return cpu;
+}
+#else
+static int acpi_rvtrace_get_cpu(struct device *dev)
+{
+	return -ENODEV;
+}
+#endif
+
 #ifdef CONFIG_OF
 static int of_rvtrace_get_cpu(struct device *dev)
 {
@@ -204,6 +261,8 @@ static int rvtrace_get_cpu(struct device *dev)
 {
 	if (is_of_node(dev_fwnode(dev)))
 		return of_rvtrace_get_cpu(dev);
+	else if (is_acpi_device_node(dev_fwnode(dev)))
+		return acpi_rvtrace_get_cpu(dev);
 
 	return -ENODEV;
 }
@@ -300,6 +359,7 @@ static struct platform_driver rvtrace_platform_driver = {
 	.driver = {
 		.name		= "rvtrace",
 		.of_match_table	= rvtrace_platform_match,
+		.acpi_match_table = ACPI_PTR(rvtrace_platform_acpi_match),
 	},
 	.probe = rvtrace_platform_probe,
 	.remove = rvtrace_platform_remove,
