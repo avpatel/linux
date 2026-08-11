@@ -101,6 +101,12 @@ static int rvtrace_parse_outconns(struct gtrace_platform_data *pdata)
 			break;
 		}
 		rdev_node = fwnode_graph_get_port_parent(rep_node);
+		if (!rdev_node) {
+			ret = -ENODEV;
+			fwnode_handle_put(ep_node);
+			fwnode_handle_put(rep_node);
+			break;
+		}
 
 		ret = fwnode_graph_parse_endpoint(rep_node, &rep);
 		if (ret) {
@@ -126,8 +132,9 @@ static int rvtrace_parse_outconns(struct gtrace_platform_data *pdata)
 			break;
 		}
 
-		pdata->outconns[i] = conn;
-		i++;
+		pdata->outconns[i++] = conn;
+		fwnode_handle_put(rep_node);
+		fwnode_handle_put(rdev_node);
 	}
 
 done:
