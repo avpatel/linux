@@ -424,6 +424,15 @@ SYM_FUNC_END(call_on_irq_stack)
  * arguments are passed to schedule_tail.
  */
 SYM_FUNC_START(__switch_to)
+#ifdef CONFIG_RISCV_SBI_SSE
+	/*
+	 * Mark the interval where tp changes from prev to next. SSE entry uses
+	 * the interrupted tp while this per-CPU pointer is NULL.
+	 */
+	asm_per_cpu t0, __sbi_sse_entry_task, t1
+	REG_S zero, 0(t0)
+#endif
+
 	/* Save context into prev->thread */
 	li    a4,  TASK_THREAD_RA
 	add   a3, a0, a4
@@ -470,6 +479,11 @@ SYM_FUNC_START(__switch_to)
 	REG_L s11, TASK_THREAD_S11_RA(a4)
 	/* The offset of thread_info in task_struct is zero. */
 	move tp, a1
+#ifdef CONFIG_RISCV_SBI_SSE
+	/* Publish next only after tp contains its task_struct pointer. */
+	asm_per_cpu t0, __sbi_sse_entry_task, t1
+	REG_S tp, 0(t0)
+#endif
 	/* Switch to the next shadow call stack */
 	scs_load_current
 	ret
