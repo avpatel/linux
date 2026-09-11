@@ -23506,6 +23506,7 @@ C:	irc://irc.libera.chat/riscv
 P:	Documentation/arch/riscv/patch-acceptance.rst
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/riscv/linux.git
 F:	arch/riscv/
+F:	tools/testing/selftests/riscv/
 N:	riscv
 K:	riscv
 
@@ -23631,6 +23632,7 @@ F:	arch/riscv/kernel/sbi_sse.c
 F:	arch/riscv/kernel/sbi_sse_entry.S
 F:	drivers/firmware/riscv/riscv_sbi_sse.c
 F:	include/linux/riscv_sbi_sse.h
+F:	tools/testing/selftests/riscv/sse/
 
 RISC-V TENSTORRENT SoC SUPPORT
 M:	Drew Fustini <dfustini@oss.tenstorrent.com>
