@@ -11,6 +11,7 @@ RISC-V architecture
     vm-layout
     hwprobe
     patch-acceptance
+    pmu-sse
     uabi
     vector
     cmodx

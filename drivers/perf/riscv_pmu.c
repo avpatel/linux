@@ -13,6 +13,7 @@
 #include <linux/irqdesc.h>
 #include <linux/perf/riscv_pmu.h>
 #include <linux/printk.h>
+#include <linux/riscv_sbi_sse.h>
 #include <linux/smp.h>
 #include <linux/sched_clock.h>
 
@@ -247,6 +248,11 @@ void riscv_pmu_start(struct perf_event *event, int flags)
 	if (flags & PERF_EF_RELOAD)
 		WARN_ON_ONCE(!(event->hw.state & PERF_HES_UPTODATE));
 
+#ifdef CONFIG_RISCV_PMU_SBI_SSE
+	if (unlikely(this_cpu_ptr(rvpmu->hw_events)->sse_failed))
+		return;
+#endif
+
 	hwc->state = 0;
 	riscv_pmu_event_set_period(event);
 	init_val = local64_read(&hwc->prev_count) & max_period;
@@ -306,6 +312,7 @@ static int riscv_pmu_event_init(struct perf_event *event)
 	struct hw_perf_event *hwc = &event->hw;
 	struct riscv_pmu *rvpmu = to_riscv_pmu(event->pmu);
 	int mapped_event;
+	int ret;
 	u64 event_config = 0;
 	uint64_t cmask;
 
@@ -331,8 +338,11 @@ static int riscv_pmu_event_init(struct perf_event *event)
 	hwc->idx = -1;
 	hwc->event_base = mapped_event;
 
-	if (rvpmu->event_init)
-		rvpmu->event_init(event);
+	if (rvpmu->event_init) {
+		ret = rvpmu->event_init(event);
+		if (ret)
+			return ret;
+	}
 
 	if (!is_sampling_event(event)) {
 		/*
