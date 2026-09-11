@@ -42,6 +42,7 @@ int sse_event_enable(struct sse_event *sse_evt);
 int sse_event_disable(struct sse_event *sse_evt);
 
 /* Local events require the caller to remain on the current CPU. */
+bool sse_event_is_enabled_local(struct sse_event *sse_evt);
 int sse_event_enable_local(struct sse_event *sse_evt);
 int sse_event_disable_local(struct sse_event *sse_evt);
 
@@ -74,6 +75,11 @@ static inline int sse_event_enable(struct sse_event *sse_evt)
 static inline int sse_event_disable(struct sse_event *sse_evt)
 {
 	return -EOPNOTSUPP;
+}
+
+static inline bool sse_event_is_enabled_local(struct sse_event *sse_evt)
+{
+	return false;
 }
 
 static inline int sse_event_enable_local(struct sse_event *sse_evt)
