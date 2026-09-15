@@ -11,6 +11,7 @@
 #include <linux/module.h>
 #include <linux/uaccess.h>
 #include <linux/kvm_host.h>
+#include <linux/kvm_irqfd.h>
 #include <asm/kvm_mmu.h>
 
 const struct kvm_stats_desc kvm_vm_stats_desc[] = {
@@ -59,6 +60,42 @@ void kvm_arch_destroy_vm(struct kvm *kvm)
 	rcu_barrier();
 
 	kvm_mmu_free_memory_cache(&kvm->arch.pgd_split_page_cache);
+}
+
+bool kvm_arch_has_irq_bypass(void)
+{
+	return kvm_riscv_aia_available();
+}
+
+bool kvm_arch_intc_initialized(struct kvm *kvm)
+{
+	return kvm_riscv_aia_initialized(kvm);
+}
+
+int kvm_arch_irq_bypass_add_producer(struct irq_bypass_consumer *cons,
+				     struct irq_bypass_producer *prod)
+{
+	struct kvm_kernel_irqfd *irqfd = container_of(cons, struct kvm_kernel_irqfd, consumer);
+	struct kvm *kvm = irqfd->kvm;
+
+	if (kvm->arch.aia.mode == KVM_DEV_RISCV_AIA_MODE_EMUL)
+		return -EOPNOTSUPP;
+
+	guard(spinlock_irq)(&kvm->irqfds.lock);
+	irqfd->producer = prod;
+	return 0;
+}
+
+void kvm_arch_irq_bypass_del_producer(struct irq_bypass_consumer *cons,
+				      struct irq_bypass_producer *prod)
+{
+	struct kvm_kernel_irqfd *irqfd = container_of(cons, struct kvm_kernel_irqfd, consumer);
+	struct kvm *kvm = irqfd->kvm;
+
+	WARN_ON_ONCE(irqfd->producer != prod);
+
+	guard(spinlock_irq)(&kvm->irqfds.lock);
+	irqfd->producer = NULL;
 }
 
 int kvm_vm_ioctl_irq_line(struct kvm *kvm, struct kvm_irq_level *irql,
