@@ -29,8 +29,10 @@ config KVM
 	select KVM_GENERIC_PRE_FAULT_MEMORY
 	select KVM_MMU_LOCKLESS_AGING
 	select VIRT_XFER_TO_GUEST_WORK
+	select KVM_VFIO
 	select SCHED_INFO
 	select GUEST_PERF_EVENTS if PERF_EVENTS
+	select SRCU
 	help
 	  Support hosting virtualized guest machines.
 
