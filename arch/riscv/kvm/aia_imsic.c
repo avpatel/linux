@@ -768,9 +768,58 @@ void kvm_riscv_vcpu_aia_imsic_release(struct kvm_vcpu *vcpu)
 	kvm_riscv_aia_free_hgei(old_vsfile_cpu, old_vsfile_hgei);
 }
 
+static u64 imsic_msi_addr_mask(struct kvm *kvm)
+{
+	struct kvm_aia *aia = &kvm->arch.aia;
+	u64 group_mask = BIT_ULL(aia->nr_group_bits) - 1;
+
+	return (group_mask << (aia->nr_group_shift - IMSIC_MMIO_PAGE_SHIFT)) |
+	       (BIT_ULL(aia->nr_hart_bits + aia->nr_guest_bits) - 1);
+}
+
+static int imsic_vsfile_target_replace(struct kvm_vcpu *vcpu, phys_addr_t vsfile_pa)
+{
+	struct kvm *kvm = vcpu->kvm;
+	struct kvm_aia *aia = &kvm->arch.aia;
+	struct imsic *imsic = vcpu->arch.aia_context.imsic_state;
+	struct riscv_iommu_ir_target *target = &aia->targets[vcpu->vcpu_idx];
+	struct riscv_iommu_ir_vcpu_info vcpu_info = {
+		.cmd = RISCV_IOMMU_IR_UPDATE_TARGET,
+		.owner = kvm,
+		.msi_addr_mask = imsic_msi_addr_mask(kvm),
+	};
+	struct kvm_kernel_irqfd *irqfd;
+	int ret;
+
+	lockdep_assert_held(&kvm->irqfds.lock);
+	lockdep_assert_held(&imsic->vsfile_lock);
+
+	if (imsic->vsfile_cpu < 0) {
+		target->type = RISCV_IOMMU_IR_TARGET_IMSIC;
+		target->hpa = vsfile_pa;
+		return 0;
+	}
+
+	vcpu_info.msi_addr_pattern = (target->gpa >> IMSIC_MMIO_PAGE_SHIFT) &
+				     ~vcpu_info.msi_addr_mask;
+	vcpu_info.target = *target;
+	vcpu_info.target.type = RISCV_IOMMU_IR_TARGET_IMSIC;
+	vcpu_info.target.hpa = vsfile_pa;
+	list_for_each_entry(irqfd, &kvm->irqfds.items, list) {
+		if (!irqfd->irq_bypass_vcpu)
+			continue;
+
+		ret = irq_set_vcpu_affinity(irqfd->producer->irq, &vcpu_info);
+		if (ret)
+			return ret;
+	}
+	*target = vcpu_info.target;
+
+	return 0;
+}
+
 int kvm_riscv_vcpu_aia_imsic_update(struct kvm_vcpu *vcpu)
 {
-	unsigned long flags;
 	phys_addr_t new_vsfile_pa;
 	struct imsic_mrif tmrif;
 	void __iomem *new_vsfile_va;
@@ -788,11 +837,10 @@ int kvm_riscv_vcpu_aia_imsic_update(struct kvm_vcpu *vcpu)
 	if (!imsic)
 		return 1;
 
-	/* Read old IMSIC VS-file details */
-	raw_spin_lock_irqsave(&imsic->vsfile_lock, flags);
-	old_vsfile_hgei = imsic->vsfile_hgei;
-	old_vsfile_cpu = imsic->vsfile_cpu;
-	raw_spin_unlock_irqrestore(&imsic->vsfile_lock, flags);
+	scoped_guard(raw_spinlock_irqsave, &imsic->vsfile_lock) {
+		old_vsfile_hgei = imsic->vsfile_hgei;
+		old_vsfile_cpu = imsic->vsfile_cpu;
+	}
 
 	/* Do nothing if we are continuing on same CPU */
 	if (old_vsfile_cpu == vcpu->cpu)
@@ -839,15 +887,24 @@ int kvm_riscv_vcpu_aia_imsic_update(struct kvm_vcpu *vcpu)
 	if (ret)
 		goto fail_free_vsfile_hgei;
 
-	/* TODO: Update the IOMMU mapping ??? */
+	/*
+	 * Keep target replacement and VS-file publication together.
+	 * irqfds.lock nests outside the raw vsfile_lock.
+	 */
+	scoped_guard(spinlock_irqsave, &kvm->irqfds.lock) {
+		guard(raw_spinlock_irqsave)(&imsic->vsfile_lock);
 
-	/* Update new IMSIC VS-file details in IMSIC context */
-	raw_spin_lock_irqsave(&imsic->vsfile_lock, flags);
-	imsic->vsfile_cpu = vcpu->cpu;
-	imsic->vsfile_hgei = new_vsfile_hgei;
-	imsic->vsfile_va = new_vsfile_va;
-	imsic->vsfile_pa = new_vsfile_pa;
-	raw_spin_unlock_irqrestore(&imsic->vsfile_lock, flags);
+		/* Update the IOMMU mapping */
+		ret = imsic_vsfile_target_replace(vcpu, new_vsfile_pa);
+		if (ret)
+			goto fail_free_vsfile_hgei;
+
+		/* Update new IMSIC VS-file details in IMSIC context */
+		imsic->vsfile_cpu = vcpu->cpu;
+		imsic->vsfile_hgei = new_vsfile_hgei;
+		imsic->vsfile_va = new_vsfile_va;
+		imsic->vsfile_pa = new_vsfile_pa;
+	}
 
 	/*
 	 * At this point, all interrupt producers have been moved
@@ -857,7 +914,7 @@ int kvm_riscv_vcpu_aia_imsic_update(struct kvm_vcpu *vcpu)
 
 	memset(&tmrif, 0, sizeof(tmrif));
 	if (old_vsfile_cpu >= 0) {
-		/* Read and clear register state from old IMSIC VS-file */
+		/* The synchronous IPI must run without vsfile_lock held. */
 		imsic_vsfile_read(old_vsfile_hgei, old_vsfile_cpu,
 				  imsic->nr_hw_eix, true, &tmrif);
 
