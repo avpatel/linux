@@ -13,6 +13,7 @@
 
 struct sse_event;
 struct pt_regs;
+struct ghes;
 
 typedef int (sse_event_handler_fn)(u32 event_num, void *arg,
 				   struct pt_regs *regs);
@@ -36,6 +37,10 @@ int sse_event_unregister(struct sse_event *evt);
 void sse_event_cleanup(struct sse_event *evt);
 
 int sse_event_set_target_cpu(struct sse_event *sse_evt, unsigned int cpu);
+
+int sse_register_ghes(struct ghes *ghes, sse_event_handler_fn *lo_cb,
+		      sse_event_handler_fn *hi_cb);
+int sse_unregister_ghes(struct ghes *ghes);
 
 int sse_event_enable(struct sse_event *sse_evt);
 
@@ -63,6 +68,17 @@ static inline void sse_event_cleanup(struct sse_event *evt) { }
 
 static inline int sse_event_set_target_cpu(struct sse_event *sse_evt,
 					   unsigned int cpu)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int sse_register_ghes(struct ghes *ghes, sse_event_handler_fn *lo_cb,
+				    sse_event_handler_fn *hi_cb)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int sse_unregister_ghes(struct ghes *ghes)
 {
 	return -EOPNOTSUPP;
 }
