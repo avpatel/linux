@@ -328,11 +328,23 @@ static int aia_init(struct kvm *kvm)
 			goto fail_cleanup_imsics;
 	}
 
+	aia->targets = kcalloc(kvm->created_vcpus, sizeof(*aia->targets), GFP_KERNEL_ACCOUNT);
+	if (!aia->targets) {
+		ret = -ENOMEM;
+		goto fail_cleanup_all_imsics;
+	}
+	aia->nr_targets = kvm->created_vcpus;
+
+	kvm_for_each_vcpu(idx, vcpu, kvm)
+		aia->targets[vcpu->vcpu_idx].gpa = vcpu->arch.aia_context.imsic_addr;
+
 	/* Set the initialized flag */
 	kvm->arch.aia.initialized = true;
 
 	return 0;
 
+fail_cleanup_all_imsics:
+	idx = kvm->created_vcpus;
 fail_cleanup_imsics:
 	for (i = idx - 1; i >= 0; i--) {
 		vcpu = kvm_get_vcpu(kvm, i);
@@ -694,4 +706,6 @@ void kvm_riscv_aia_destroy_vm(struct kvm *kvm)
 
 	/* Cleanup APLIC context */
 	kvm_riscv_aia_aplic_cleanup(kvm);
+
+	kfree(kvm->arch.aia.targets);
 }
