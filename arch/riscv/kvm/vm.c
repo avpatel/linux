@@ -77,12 +77,18 @@ int kvm_arch_irq_bypass_add_producer(struct irq_bypass_consumer *cons,
 {
 	struct kvm_kernel_irqfd *irqfd = container_of(cons, struct kvm_kernel_irqfd, consumer);
 	struct kvm *kvm = irqfd->kvm;
+	int ret;
 
 	if (kvm->arch.aia.mode == KVM_DEV_RISCV_AIA_MODE_EMUL)
 		return -EOPNOTSUPP;
 
 	guard(spinlock_irq)(&kvm->irqfds.lock);
+
 	irqfd->producer = prod;
+	ret = kvm_riscv_irqfd_forward(irqfd);
+	if (ret != -EOPNOTSUPP)
+		KVM_BUG(ret, kvm, "Failed to enable IRQ bypass: %d\n", ret);
+
 	return 0;
 }
 

@@ -99,6 +99,7 @@ void kvm_riscv_vcpu_aia_imsic_load(struct kvm_vcpu *vcpu, int cpu);
 void kvm_riscv_vcpu_aia_imsic_put(struct kvm_vcpu *vcpu);
 void kvm_riscv_vcpu_aia_imsic_release(struct kvm_vcpu *vcpu);
 int kvm_riscv_vcpu_aia_imsic_update(struct kvm_vcpu *vcpu);
+int kvm_riscv_irqfd_forward(struct kvm_kernel_irqfd *irqfd);
 int kvm_riscv_irqfd_unforward(struct kvm_kernel_irqfd *irqfd);
 
 #define KVM_RISCV_AIA_IMSIC_TOPEI	(ISELECT_MASK + 1)
