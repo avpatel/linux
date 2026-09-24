@@ -14,6 +14,7 @@
 #include <linux/kvm_types.h>
 #include <asm/csr.h>
 
+struct riscv_iommu_ir_target;
 struct kvm_kernel_irqfd;
 
 struct kvm_aia {
@@ -49,6 +50,10 @@ struct kvm_aia {
 
 	/* Internal state of APLIC */
 	void		*aplic_state;
+
+	/* IOMMU interrupt forwarding targets */
+	struct riscv_iommu_ir_target *targets;
+	unsigned int	nr_targets;
 };
 
 struct kvm_vcpu_aia_csr {

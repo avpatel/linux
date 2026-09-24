@@ -680,6 +680,7 @@ int kvm_riscv_irqfd_unforward(struct kvm_kernel_irqfd *irqfd)
 static int imsic_vcpu_unforward(struct kvm_vcpu *vcpu)
 {
 	struct kvm *kvm = vcpu->kvm;
+	struct riscv_iommu_ir_target *target = &kvm->arch.aia.targets[vcpu->vcpu_idx];
 	struct kvm_kernel_irqfd *irqfd;
 	int ret;
 
@@ -693,6 +694,9 @@ static int imsic_vcpu_unforward(struct kvm_vcpu *vcpu)
 		if (ret)
 			return ret;
 	}
+
+	target->type = RISCV_IOMMU_IR_TARGET_INVALID;
+	target->hpa = 0;
 
 	return 0;
 }
