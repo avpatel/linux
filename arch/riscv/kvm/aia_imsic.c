@@ -818,6 +818,127 @@ static int imsic_vsfile_target_replace(struct kvm_vcpu *vcpu, phys_addr_t vsfile
 	return 0;
 }
 
+static bool imsic_irqfd_is_msix(struct kvm_kernel_irqfd *irqfd)
+{
+	struct msi_desc *desc = irq_get_msi_desc(irqfd->producer->irq);
+
+	return desc && desc->pci.msi_attrib.is_msix;
+}
+
+static bool imsic_targets_valid(struct kvm_aia *aia)
+{
+	for (unsigned int i = 0; i < aia->nr_targets; i++) {
+		if (aia->targets[i].type != RISCV_IOMMU_IR_TARGET_IMSIC)
+			return false;
+	}
+
+	return true;
+}
+
+static struct kvm_vcpu *imsic_irqfd_route_vcpu(struct kvm *kvm,
+					       struct kvm_kernel_irq_routing_entry *irq_entry)
+{
+	struct kvm_vcpu *vcpu;
+	unsigned long index;
+	gpa_t target;
+
+	target = ((gpa_t)irq_entry->msi.address_hi << 32) | irq_entry->msi.address_lo;
+	if (target & (IMSIC_MMIO_PAGE_SZ - 1))
+		return NULL;
+
+	kvm_for_each_vcpu(index, vcpu, kvm) {
+		if (target == vcpu->arch.aia_context.imsic_addr)
+			return vcpu;
+	}
+
+	return NULL;
+}
+
+static int imsic_irqfd_forward(struct kvm_kernel_irqfd *irqfd,
+			       struct kvm_kernel_irq_routing_entry *irq_entry)
+{
+	struct kvm *kvm = irqfd->kvm;
+	struct kvm_aia *aia = &kvm->arch.aia;
+	struct riscv_iommu_ir_vcpu_info vcpu_info = {
+		.cmd = RISCV_IOMMU_IR_FORWARD,
+		.owner = kvm,
+		.msi_addr_mask = imsic_msi_addr_mask(kvm),
+		.targets = aia->targets,
+		.nr_targets = aia->nr_targets,
+	};
+	struct msi_msg msg = {
+		.address_hi = irq_entry->msi.address_hi,
+		.address_lo = irq_entry->msi.address_lo,
+		.data = irq_entry->msi.data,
+	};
+	struct kvm_vcpu *vcpu;
+	int ret;
+
+	lockdep_assert_held(&kvm->irqfds.lock);
+
+	if (irq_entry->type != KVM_IRQ_ROUTING_MSI)
+		return -EOPNOTSUPP;
+
+	/*
+	 * irqbypass provides no platform MSI-message update interface, so this
+	 * direct-message path supports the VFIO PCI producer only. Limit it to
+	 * MSI-X because pci_write_msi_msg() masks an MSI-X vector around the
+	 * update, which conventional MSI cannot provide.
+	 */
+	if (kvm->arch.aia.mode != KVM_DEV_RISCV_AIA_MODE_HWACCEL ||
+	    !imsic_irqfd_is_msix(irqfd))
+		return -EOPNOTSUPP;
+
+	if (!imsic_targets_valid(&kvm->arch.aia)) {
+		pr_debug("KVM: IMSIC IRQ bypass requires all VS-files\n");
+		return -EOPNOTSUPP;
+	}
+
+	/* Leave guest messages that name no vIMSIC to software injection. */
+	vcpu = imsic_irqfd_route_vcpu(kvm, irq_entry);
+	if (!vcpu)
+		return -EOPNOTSUPP;
+
+	vcpu_info.msi_addr_pattern = (vcpu->arch.aia_context.imsic_addr >> IMSIC_MMIO_PAGE_SHIFT) &
+				     ~vcpu_info.msi_addr_mask;
+	ret = irq_set_vcpu_affinity(irqfd->producer->irq, &vcpu_info);
+	if (ret)
+		return ret;
+
+	pci_write_msi_msg(irqfd->producer->irq, &msg);
+	irqfd->irq_bypass_vcpu = vcpu;
+
+	return 0;
+}
+
+int kvm_riscv_irqfd_forward(struct kvm_kernel_irqfd *irqfd)
+{
+	return imsic_irqfd_forward(irqfd, &irqfd->irq_entry);
+}
+
+void kvm_arch_update_irqfd_routing(struct kvm_kernel_irqfd *irqfd,
+				   struct kvm_kernel_irq_routing_entry *old,
+				   struct kvm_kernel_irq_routing_entry *new)
+{
+	struct kvm *kvm = irqfd->kvm;
+	int ret;
+
+	if (old->type == KVM_IRQ_ROUTING_MSI &&
+	    new->type == KVM_IRQ_ROUTING_MSI &&
+	    !memcmp(&old->msi, &new->msi, sizeof(new->msi)))
+		return;
+
+	ret = kvm_riscv_irqfd_unforward(irqfd);
+	if (KVM_BUG(ret, kvm, "Failed to redirect IRQ to host delivery: %d\n", ret))
+		return;
+
+	ret = imsic_irqfd_forward(irqfd, new);
+	if (ret == -EOPNOTSUPP)
+		return;
+
+	KVM_BUG(ret, kvm, "Failed to activate IMSIC IRQ bypass: %d\n", ret);
+}
+
 int kvm_riscv_vcpu_aia_imsic_update(struct kvm_vcpu *vcpu)
 {
 	phys_addr_t new_vsfile_pa;
