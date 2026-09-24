@@ -91,10 +91,14 @@ void kvm_arch_irq_bypass_del_producer(struct irq_bypass_consumer *cons,
 {
 	struct kvm_kernel_irqfd *irqfd = container_of(cons, struct kvm_kernel_irqfd, consumer);
 	struct kvm *kvm = irqfd->kvm;
+	int ret;
 
 	WARN_ON_ONCE(irqfd->producer != prod);
 
 	guard(spinlock_irq)(&kvm->irqfds.lock);
+
+	ret = kvm_riscv_irqfd_unforward(irqfd);
+	KVM_BUG(ret, kvm, "Failed to redirect IRQ to host delivery: %d\n", ret);
 	irqfd->producer = NULL;
 }
 
