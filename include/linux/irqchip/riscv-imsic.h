@@ -84,12 +84,18 @@ struct imsic_global_config {
 #ifdef CONFIG_RISCV_IMSIC
 
 const struct imsic_global_config *imsic_get_global_config(void);
+bool imsic_dev_has_imsic_msi_parent(struct device *dev);
 
 #else
 
 static inline const struct imsic_global_config *imsic_get_global_config(void)
 {
 	return NULL;
+}
+
+static inline bool imsic_dev_has_imsic_msi_parent(struct device *dev)
+{
+	return false;
 }
 
 #endif
