@@ -15,8 +15,12 @@
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/iopoll.h>
+#include <linux/sizes.h>
 
 #include "iommu-bits.h"
+
+/* IOVA base for the SW MSI reservation */
+#define RISCV_IOMMU_MSI_IOVA_BASE	SZ_16M
 
 struct riscv_iommu_device;
 
