@@ -869,13 +869,6 @@ PT_IOMMU_CHECK_DOMAIN(struct riscv_iommu_domain, riscvpt.iommu, domain);
 #define iommu_domain_to_riscv(iommu_domain) \
 	container_of(iommu_domain, struct riscv_iommu_domain, domain)
 
-/* Private IOMMU data for managed devices, dev_iommu_priv_* */
-struct riscv_iommu_info {
-	struct riscv_iommu_domain *domain;
-	struct riscv_iommu_dc dc;
-	unsigned int nr_forwarded_irqs;
-};
-
 static struct riscv_iommu_msi_table *riscv_iommu_domain_msi_table(struct iommu_domain *iommu_domain)
 {
 	struct riscv_iommu_domain *domain;
@@ -1465,13 +1458,15 @@ static bool riscv_iommu_iohgatp_supported(struct riscv_iommu_device *iommu,
 }
 
 static int riscv_iommu_msi_table_alloc(struct riscv_iommu_domain *domain,
-				       struct riscv_iommu_device *iommu)
+				       struct riscv_iommu_device *iommu,
+				       struct riscv_iommu_info *info)
 {
 	struct riscv_iommu_msi_table *msi_table = &domain->msi_table;
 	struct riscv_iommu_msipte *root;
 	size_t size;
 
-	if (!(iommu->caps & RISCV_IOMMU_CAPABILITIES_MSI_FLAT))
+	if (!(iommu->caps & RISCV_IOMMU_CAPABILITIES_MSI_FLAT) ||
+	    !riscv_iommu_ir_device_enabled(info))
 		return 0;
 
 	guard(mutex)(&domain->mutex);
@@ -1544,7 +1539,7 @@ static int riscv_iommu_attach_paging_domain(struct iommu_domain *iommu_domain,
 		if (!riscv_iommu_iohgatp_supported(iommu, pt_info.iohgatp_mode))
 			return -ENODEV;
 
-		ret = riscv_iommu_msi_table_alloc(domain, iommu);
+		ret = riscv_iommu_msi_table_alloc(domain, iommu, info);
 		if (ret)
 			return ret;
 
@@ -1811,8 +1806,8 @@ static struct iommu_device *riscv_iommu_probe_device(struct device *dev)
 	struct riscv_iommu_device *iommu;
 	struct riscv_iommu_info *info;
 	struct riscv_iommu_dc *dc;
+	int i, ret;
 	u64 tc;
-	int i;
 
 	if (!fwspec || !fwspec->iommu_fwnode->dev || !fwspec->num_ids)
 		return ERR_PTR(-ENODEV);
@@ -1847,6 +1842,12 @@ static struct iommu_device *riscv_iommu_probe_device(struct device *dev)
 		WRITE_ONCE(dc->tc, tc);
 	}
 
+	ret = riscv_iommu_ir_probe_device(iommu, dev, info);
+	if (ret) {
+		kfree(info);
+		return ERR_PTR(ret);
+	}
+
 	dev_iommu_priv_set(dev, info);
 
 	return &iommu->iommu;
@@ -1856,6 +1857,7 @@ static void riscv_iommu_release_device(struct device *dev)
 {
 	struct riscv_iommu_info *info = dev_iommu_priv_get(dev);
 
+	riscv_iommu_ir_release_device(dev, info);
 	kfree_rcu_mightsleep(info);
 }
 
@@ -1950,6 +1952,7 @@ void riscv_iommu_remove(struct riscv_iommu_device *iommu)
 	riscv_iommu_iodir_set_mode(iommu, RISCV_IOMMU_DDTP_IOMMU_MODE_OFF);
 	riscv_iommu_queue_disable(&iommu->cmdq);
 	riscv_iommu_queue_disable(&iommu->fltq);
+	riscv_iommu_ir_irq_domain_remove(iommu);
 }
 
 int riscv_iommu_init(struct riscv_iommu_device *iommu)

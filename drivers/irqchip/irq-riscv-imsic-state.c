@@ -65,6 +65,12 @@ const struct imsic_global_config *imsic_get_global_config(void)
 }
 EXPORT_SYMBOL_GPL(imsic_get_global_config);
 
+struct irq_domain *imsic_get_base_domain(void)
+{
+	return imsic ? imsic->base_domain : NULL;
+}
+EXPORT_SYMBOL_GPL(imsic_get_base_domain);
+
 /**
  * imsic_dev_has_imsic_msi_parent - Check for an IMSIC MSI parent
  * @dev: Device to check
