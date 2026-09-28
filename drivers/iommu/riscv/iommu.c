@@ -22,6 +22,8 @@
 #include <linux/iopoll.h>
 #include <linux/irqchip/riscv-imsic.h>
 #include <linux/kernel.h>
+#include <linux/moduleparam.h>
+#include <linux/mutex.h>
 #include <linux/pci.h>
 #include <linux/generic_pt/iommu.h>
 
@@ -29,6 +31,16 @@
 #include "../iommu-pages.h"
 #include "iommu-bits.h"
 #include "iommu.h"
+
+#undef MODULE_PARAM_PREFIX
+#define MODULE_PARAM_PREFIX "riscv_iommu."
+
+#define RISCV_IOMMU_DEFAULT_NR_MSI_PTES	512
+
+/* A zero value disables guest MSI table allocation. */
+static unsigned int riscv_iommu_nr_msi_ptes = RISCV_IOMMU_DEFAULT_NR_MSI_PTES;
+module_param_named(nr_msi_ptes, riscv_iommu_nr_msi_ptes, uint, 0644);
+MODULE_PARM_DESC(nr_msi_ptes, "Number of PTEs for new second-stage domains (default: 512)");
 
 /* Timeouts in [us] */
 #define RISCV_IOMMU_QCSR_TIMEOUT	150000
@@ -856,8 +868,10 @@ struct riscv_iommu_domain {
 	};
 	struct list_head bonds;
 	spinlock_t lock;		/* protect bonds list updates. */
+	struct mutex mutex;		/* serialize domain state updates */
 	int pscid;
 	int gscid;
+	struct riscv_iommu_msi_table msi_table;
 };
 PT_IOMMU_CHECK_DOMAIN(struct riscv_iommu_domain, riscvpt.iommu, domain);
 
@@ -1314,6 +1328,7 @@ static void riscv_iommu_free_paging_domain(struct iommu_domain *iommu_domain)
 		ida_free(&riscv_iommu_gscids, domain->gscid);
 
 	pt_iommu_deinit(&domain->riscvpt.iommu);
+	iommu_free_pages(domain->msi_table.root);
 	kfree(domain);
 }
 
@@ -1349,6 +1364,37 @@ static bool riscv_iommu_iohgatp_supported(struct riscv_iommu_device *iommu,
 	return false;
 }
 
+static int riscv_iommu_msi_table_alloc(struct riscv_iommu_domain *domain,
+				       struct riscv_iommu_device *iommu)
+{
+	struct riscv_iommu_msi_table *msi_table = &domain->msi_table;
+	struct riscv_iommu_msipte *root;
+	size_t size;
+
+	if (!(iommu->caps & RISCV_IOMMU_CAPABILITIES_MSI_FLAT))
+		return 0;
+
+	guard(mutex)(&domain->mutex);
+
+	if (msi_table->root)
+		return 0;
+
+	if (!msi_table->nr_ptes)
+		return 0;
+
+	size = array_size(msi_table->nr_ptes, sizeof(*msi_table->root));
+	if (size == SIZE_MAX)
+		return -EOVERFLOW;
+
+	root = iommu_alloc_pages_node_sz(NUMA_NO_NODE, GFP_KERNEL_ACCOUNT, size);
+	if (!root)
+		return -ENOMEM;
+
+	msi_table->root = root;
+
+	return 0;
+}
+
 static int riscv_iommu_attach_paging_domain(struct iommu_domain *iommu_domain,
 					    struct device *dev,
 					    struct iommu_domain *old)
@@ -1358,6 +1404,7 @@ static int riscv_iommu_attach_paging_domain(struct iommu_domain *iommu_domain,
 	struct riscv_iommu_info *info = dev_iommu_priv_get(dev);
 	struct pt_iommu_riscv_64_hw_info pt_info;
 	struct riscv_iommu_dc dc = {0};
+	int ret;
 
 	pt_iommu_riscv_64_hw_info(&domain->riscvpt, &pt_info);
 
@@ -1368,6 +1415,10 @@ static int riscv_iommu_attach_paging_domain(struct iommu_domain *iommu_domain,
 		if (iommu_domain->dirty_ops &&
 		    !(iommu->caps & RISCV_IOMMU_CAPABILITIES_AMO_HWAD))
 			return -EINVAL;
+
+		ret = riscv_iommu_msi_table_alloc(domain, iommu);
+		if (ret)
+			return ret;
 
 		dc.iohgatp =
 			FIELD_PREP(RISCV_IOMMU_DC_IOHGATP_MODE, pt_info.iohgatp_mode) |
@@ -1498,6 +1549,7 @@ riscv_iommu_domain_alloc_paging_flags(struct device *dev, u32 flags,
 
 	INIT_LIST_HEAD_RCU(&domain->bonds);
 	spin_lock_init(&domain->lock);
+	mutex_init(&domain->mutex);
 	iommu = dev_to_iommu(dev);
 	cfg.common.hw_max_oasz_lg2 = 56;
 	/*
@@ -1519,6 +1571,15 @@ riscv_iommu_domain_alloc_paging_flags(struct device *dev, u32 flags,
 	case IOMMU_HWPT_ALLOC_NEST_PARENT:
 	case IOMMU_HWPT_ALLOC_DIRTY_TRACKING:
 	case IOMMU_HWPT_ALLOC_DIRTY_TRACKING | IOMMU_HWPT_ALLOC_NEST_PARENT:
+
+		/*
+		 * Capture the current number of MSI PTEs now since it must remain
+		 * stable for the lifetime of the domain.
+		 */
+		kernel_param_lock(THIS_MODULE);
+		domain->msi_table.nr_ptes = riscv_iommu_nr_msi_ptes;
+		kernel_param_unlock(THIS_MODULE);
+
 		ret = riscv_iommu_init_domain_s2(dev, domain, &cfg, flags);
 		break;
 	default:
