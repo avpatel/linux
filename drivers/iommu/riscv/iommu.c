@@ -1441,6 +1441,33 @@ static void riscv_iommu_free_paging_domain(struct iommu_domain *iommu_domain)
 	kfree(domain);
 }
 
+bool riscv_iommu_msi_table_check_caps(struct riscv_iommu_msi_table *msi_table, u64 iommu_caps)
+{
+	struct riscv_iommu_domain *domain;
+	struct riscv_iommu_device *iommu, *prev = NULL;
+	struct riscv_iommu_bond *bond;
+	bool supported = true;
+
+	/* The MSI table lock excludes bond updates for this domain. */
+	lockdep_assert_held(&msi_table->lock);
+
+	domain = container_of(msi_table, struct riscv_iommu_domain, msi_table);
+
+	/* Bonds are grouped by IOMMU, so validate each IOMMU once. */
+	list_for_each_entry(bond, &domain->bonds, list) {
+		iommu = dev_to_iommu(bond->dev);
+		if (iommu == prev)
+			continue;
+		if ((iommu->caps & iommu_caps) != iommu_caps) {
+			supported = false;
+			break;
+		}
+		prev = iommu;
+	}
+
+	return supported;
+}
+
 static bool riscv_iommu_fsc_supported(struct riscv_iommu_device *iommu,
 				      int mode)
 {
@@ -1512,6 +1539,8 @@ static bool riscv_iommu_can_attach_paging_domain(struct iommu_domain *iommu_doma
 {
 	struct riscv_iommu_domain *domain = iommu_domain_to_riscv(iommu_domain);
 	struct riscv_iommu_info *info = dev_iommu_priv_get(dev);
+	struct riscv_iommu_device *iommu = dev_to_iommu(dev);
+	u64 required_caps = domain->msi_table.required_caps;
 	bool new_is_s2 = domain->gscid;
 	struct riscv_iommu_msi_table *new_msi_table, *old_msi_table;
 
@@ -1531,6 +1560,8 @@ static bool riscv_iommu_can_attach_paging_domain(struct iommu_domain *iommu_doma
 	 * to move or roll back while this device has forwarded interrupts.
 	 */
 	if (new_is_s2 && old_msi_table && info->nr_forwarded_irqs)
+		return false;
+	if (new_is_s2 && required_caps && (iommu->caps & required_caps) != required_caps)
 		return false;
 
 	return true;

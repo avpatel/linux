@@ -20,9 +20,120 @@ static int riscv_iommu_ir_irq_set_affinity(struct irq_data *data,
 	return irq_chip_set_affinity_parent(data, mask, force);
 }
 
+/* IOMMU extract (RISC-V IOMMU spec section 2.3.3) applied to the two-run IMSIC topology */
+static size_t riscv_iommu_ir_extract(u64 value, u64 mask)
+{
+	/* Separate the optional group index from the low guest and hart indices. */
+	u64 upper_mask = mask & (mask + 1);
+	u64 lower_mask = mask ^ upper_mask;
+	unsigned int shift;
+
+	if (!upper_mask)
+		return value & lower_mask;
+
+	shift = __ffs64(upper_mask) - fls64(lower_mask);
+	return (value & lower_mask) | ((value & upper_mask) >> shift);
+}
+
+static size_t riscv_iommu_ir_nr_ptes(const struct riscv_iommu_ir_vcpu_info *vcpu_info)
+{
+	return riscv_iommu_ir_extract(vcpu_info->msi_addr_mask, vcpu_info->msi_addr_mask) + 1;
+}
+
+static int riscv_iommu_ir_validate_target(const struct riscv_iommu_ir_vcpu_info *vcpu_info,
+					  const struct riscv_iommu_ir_target *target,
+					  u64 *required_caps)
+{
+	u64 addr = target->gpa >> IMSIC_MMIO_PAGE_SHIFT;
+
+	if (!IS_ALIGNED(target->gpa, IMSIC_MMIO_PAGE_SZ) ||
+	    (addr & ~vcpu_info->msi_addr_mask) != vcpu_info->msi_addr_pattern)
+		return -EINVAL;
+
+	switch (target->type) {
+	case RISCV_IOMMU_IR_TARGET_IMSIC:
+		if (!IS_ALIGNED(target->hpa, IMSIC_MMIO_PAGE_SZ) ||
+		    (target->hpa >> IMSIC_MMIO_PAGE_SHIFT) > FIELD_MAX(RISCV_IOMMU_MSIPTE_PPN))
+			return -EINVAL;
+		*required_caps |= RISCV_IOMMU_CAPABILITIES_MSI_FLAT;
+		break;
+	case RISCV_IOMMU_IR_TARGET_MRIF:
+		if (!IS_ALIGNED(target->mrif_hpa, SZ_512) ||
+		    (target->mrif_hpa >> 9) > FIELD_MAX(RISCV_IOMMU_MSIPTE_MRIF_ADDR) ||
+		    !IS_ALIGNED(target->notice_hpa, IMSIC_MMIO_PAGE_SZ) ||
+		    (target->notice_hpa >> IMSIC_MMIO_PAGE_SHIFT) >
+			FIELD_MAX(RISCV_IOMMU_MSIPTE_MRIF_NPPN) ||
+		    target->notice_id >= IMSIC_MAX_ID)
+			return -EINVAL;
+		*required_caps |= RISCV_IOMMU_CAPABILITIES_MSI_FLAT |
+				  RISCV_IOMMU_CAPABILITIES_MSI_MRIF;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int riscv_iommu_ir_validate_targets(const struct riscv_iommu_ir_vcpu_info *vcpu_info,
+					   size_t nr_ptes, u64 *required_caps)
+{
+	int ret;
+
+	if (!vcpu_info->targets || !vcpu_info->nr_targets || vcpu_info->nr_targets > nr_ptes)
+		return -EINVAL;
+
+	for (unsigned int i = 0; i < vcpu_info->nr_targets; i++) {
+		ret = riscv_iommu_ir_validate_target(vcpu_info, &vcpu_info->targets[i],
+						     required_caps);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
 static int riscv_iommu_ir_activate(struct riscv_iommu_msi_table *msi_table,
+				   struct riscv_iommu_device *iommu,
 				   struct riscv_iommu_ir_vcpu_info *vcpu_info)
 {
+	u64 pattern = vcpu_info->msi_addr_pattern;
+	u64 mask = vcpu_info->msi_addr_mask;
+	u64 required_caps = 0;
+	size_t nr_ptes;
+	int ret;
+
+	if (!vcpu_info->owner || (pattern & mask) ||
+	    ((pattern | mask) & ~RISCV_IOMMU_DC_MSI_ADDR_MASK))
+		return -EINVAL;
+
+	/*
+	 * riscv_iommu_ir_extract() requires the mask to contain the low
+	 * guest/hart index run and at most one additional group index run.
+	 */
+	mask &= mask + 1;
+	if (mask) {
+		mask >>= __ffs64(mask);
+		if (mask & (mask + 1))
+			return -EINVAL;
+	}
+
+	nr_ptes = riscv_iommu_ir_nr_ptes(vcpu_info);
+
+	ret = riscv_iommu_ir_validate_targets(vcpu_info, nr_ptes, &required_caps);
+	if (ret)
+		return ret;
+
+	if (!riscv_iommu_msi_table_check_caps(msi_table, required_caps))
+		return -EOPNOTSUPP;
+
+	if (nr_ptes > msi_table->nr_ptes) {
+		dev_warn_once(iommu->dev,
+			      "guest MSI topology requires %zu PTEs, but the IOMMU domain only supports %u; using host IRQ delivery\n",
+			      nr_ptes, msi_table->nr_ptes);
+		return -EOPNOTSUPP;
+	}
+
 	return -EOPNOTSUPP;
 }
 
@@ -34,6 +145,18 @@ static int riscv_iommu_ir_deactivate(struct riscv_iommu_msi_table *msi_table)
 static int riscv_iommu_ir_update_target(struct riscv_iommu_msi_table *msi_table,
 					struct riscv_iommu_ir_vcpu_info *vcpu_info)
 {
+	const struct riscv_iommu_ir_target *target = &vcpu_info->target;
+	u64 required_caps = 0;
+	int ret;
+
+	ret = riscv_iommu_ir_validate_target(vcpu_info, target, &required_caps);
+	if (ret)
+		return ret;
+
+	required_caps |= msi_table->required_caps;
+	if (!riscv_iommu_msi_table_check_caps(msi_table, required_caps))
+		return -EOPNOTSUPP;
+
 	return -EOPNOTSUPP;
 }
 
@@ -42,6 +165,7 @@ static int riscv_iommu_ir_irq_set_vcpu_affinity_locked(struct irq_data *data,
 						       struct riscv_iommu_ir_vcpu_info *vcpu_info,
 						       struct riscv_iommu_msi_table *msi_table)
 {
+	struct riscv_iommu_device *iommu = data->domain->host_data;
 	int ret;
 
 	if (!vcpu_info) {
@@ -59,6 +183,7 @@ static int riscv_iommu_ir_irq_set_vcpu_affinity_locked(struct irq_data *data,
 		irqd_clr_forwarded_to_vcpu(data);
 
 		if (!msi_table->nr_forwarded_irqs) {
+			msi_table->required_caps = 0;
 			msi_table->owner = NULL;
 			msi_table->msi_addr_mask = 0;
 			msi_table->msi_addr_pattern = 0;
@@ -72,7 +197,7 @@ static int riscv_iommu_ir_irq_set_vcpu_affinity_locked(struct irq_data *data,
 		    irqd_is_forwarded_to_vcpu(data))
 			return -EINVAL;
 
-		ret = riscv_iommu_ir_activate(msi_table, vcpu_info);
+		ret = riscv_iommu_ir_activate(msi_table, iommu, vcpu_info);
 		if (ret)
 			return ret;
 
