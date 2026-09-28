@@ -68,6 +68,13 @@ struct riscv_iommu_device {
 	u64 *ddt_root;
 };
 
+struct riscv_iommu_msi_table {
+	unsigned int nr_ptes;
+	struct riscv_iommu_msipte *root;
+	u64 msi_addr_mask;
+	u64 msi_addr_pattern;
+};
+
 int riscv_iommu_init(struct riscv_iommu_device *iommu);
 void riscv_iommu_remove(struct riscv_iommu_device *iommu);
 void riscv_iommu_disable(struct riscv_iommu_device *iommu);
