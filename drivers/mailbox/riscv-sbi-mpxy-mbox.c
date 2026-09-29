@@ -112,10 +112,10 @@ struct mpxy_mbox {
 
 /* ====== MPXY RPMI processing ====== */
 
-static void mpxy_mbox_send_rpmi_data(struct mpxy_mbox_channel *mchan,
-				     struct rpmi_mbox_message *msg)
+static int mpxy_mbox_send_rpmi_data(struct mpxy_mbox_channel *mchan,
+				    struct rpmi_mbox_message *msg)
 {
-	msg->error = 0;
+	int error = 0;
 	switch (msg->type) {
 	case RPMI_MBOX_MSG_TYPE_GET_ATTRIBUTE:
 		switch (msg->attr.id) {
@@ -138,52 +138,54 @@ static void mpxy_mbox_send_rpmi_data(struct mpxy_mbox_channel *mchan,
 			msg->attr.value = mchan->rpmi_attrs.impl_version;
 			break;
 		default:
-			msg->error = -EOPNOTSUPP;
+			error = -EOPNOTSUPP;
 			break;
 		}
 		break;
 	case RPMI_MBOX_MSG_TYPE_SET_ATTRIBUTE:
 		/* None of the RPMI linux mailbox attributes are writeable */
-		msg->error = -EOPNOTSUPP;
+		error = -EOPNOTSUPP;
 		break;
 	case RPMI_MBOX_MSG_TYPE_SEND_WITH_RESPONSE:
 		if ((!msg->data.request && msg->data.request_len) ||
 		    (msg->data.request && msg->data.request_len > mchan->max_xfer_len) ||
 		    (!msg->data.response && msg->data.max_response_len)) {
-			msg->error = -EINVAL;
+			error = -EINVAL;
 			break;
 		}
 		if (!(mchan->attrs.capability & SBI_MPXY_CHAN_CAP_SEND_WITH_RESP)) {
-			msg->error = -EIO;
+			error = -EIO;
 			break;
 		}
-		msg->error = sbi_mpxy_send_message_with_resp(mchan->channel_id,
-							     msg->data.service_id,
-							     msg->data.request,
-							     msg->data.request_len,
-							     msg->data.response,
-							     msg->data.max_response_len,
-							     &msg->data.out_response_len);
+		error = sbi_mpxy_send_message_with_resp(mchan->channel_id,
+							msg->data.service_id,
+							msg->data.request,
+							msg->data.request_len,
+							msg->data.response,
+							msg->data.max_response_len,
+							&msg->data.out_response_len);
 		break;
 	case RPMI_MBOX_MSG_TYPE_SEND_WITHOUT_RESPONSE:
 		if ((!msg->data.request && msg->data.request_len) ||
 		    (msg->data.request && msg->data.request_len > mchan->max_xfer_len)) {
-			msg->error = -EINVAL;
+			error = -EINVAL;
 			break;
 		}
 		if (!(mchan->attrs.capability & SBI_MPXY_CHAN_CAP_SEND_WITHOUT_RESP)) {
-			msg->error = -EIO;
+			error = -EIO;
 			break;
 		}
-		msg->error = sbi_mpxy_send_message_without_resp(mchan->channel_id,
-								msg->data.service_id,
-								msg->data.request,
-								msg->data.request_len);
+		error = sbi_mpxy_send_message_without_resp(mchan->channel_id,
+							   msg->data.service_id,
+							   msg->data.request,
+							   msg->data.request_len);
 		break;
 	default:
-		msg->error = -EOPNOTSUPP;
+		error = -EOPNOTSUPP;
 		break;
 	}
+
+	return error;
 }
 
 static void mpxy_mbox_peek_rpmi_data(struct mbox_chan *chan,
@@ -205,7 +207,6 @@ static void mpxy_mbox_peek_rpmi_data(struct mbox_chan *chan,
 			break;
 		msg.notif.event_id = event->event_id;
 		msg.notif.event_data = event->event_data;
-		msg.error = 0;
 
 		mbox_chan_received_data(chan, &msg);
 		pos += sizeof(*event) + msg.notif.event_datalen;
@@ -222,16 +223,16 @@ static int mpxy_mbox_read_rpmi_attrs(struct mpxy_mbox_channel *mchan)
 
 /* ====== MPXY mailbox callbacks ====== */
 
-static int mpxy_mbox_send_data(struct mbox_chan *chan, void *data)
+static int mpxy_mbox_send_data_sync(struct mbox_chan *chan, void *data)
 {
 	struct mpxy_mbox_channel *mchan = chan->con_priv;
 
-	if (mchan->attrs.msg_proto_id == SBI_MPXY_MSGPROTO_RPMI_ID) {
-		mpxy_mbox_send_rpmi_data(mchan, data);
-		return 0;
+	switch (mchan->attrs.msg_proto_id) {
+	case SBI_MPXY_MSGPROTO_RPMI_ID:
+		return mpxy_mbox_send_rpmi_data(mchan, data);
+	default:
+		return -EOPNOTSUPP;
 	}
-
-	return -EOPNOTSUPP;
 }
 
 static bool mpxy_mbox_peek_data(struct mbox_chan *chan)
@@ -423,7 +424,7 @@ static void mpxy_mbox_shutdown(struct mbox_chan *chan)
 }
 
 static const struct mbox_chan_ops mpxy_mbox_ops = {
-	.send_data = mpxy_mbox_send_data,
+	.send_data_sync = mpxy_mbox_send_data_sync,
 	.peek_data = mpxy_mbox_peek_data,
 	.startup = mpxy_mbox_startup,
 	.shutdown = mpxy_mbox_shutdown,
