@@ -164,7 +164,6 @@ struct rpmi_mbox_message {
 			u8 *event_data;
 		} notif;
 	};
-	int error;
 };
 
 /* RPMI Linux mailbox message helper routines */
@@ -174,7 +173,6 @@ static inline void rpmi_mbox_init_get_attribute(struct rpmi_mbox_message *msg,
 	msg->type = RPMI_MBOX_MSG_TYPE_GET_ATTRIBUTE;
 	msg->attr.id = id;
 	msg->attr.value = 0;
-	msg->error = 0;
 }
 
 static inline void rpmi_mbox_init_set_attribute(struct rpmi_mbox_message *msg,
@@ -184,7 +182,6 @@ static inline void rpmi_mbox_init_set_attribute(struct rpmi_mbox_message *msg,
 	msg->type = RPMI_MBOX_MSG_TYPE_SET_ATTRIBUTE;
 	msg->attr.id = id;
 	msg->attr.value = value;
-	msg->error = 0;
 }
 
 static inline void rpmi_mbox_init_send_with_response(struct rpmi_mbox_message *msg,
@@ -201,7 +198,6 @@ static inline void rpmi_mbox_init_send_with_response(struct rpmi_mbox_message *m
 	msg->data.response = response;
 	msg->data.max_response_len = max_response_len;
 	msg->data.out_response_len = 0;
-	msg->error = 0;
 }
 
 static inline void rpmi_mbox_init_send_without_response(struct rpmi_mbox_message *msg,
@@ -216,7 +212,6 @@ static inline void rpmi_mbox_init_send_without_response(struct rpmi_mbox_message
 	msg->data.response = NULL;
 	msg->data.max_response_len = 0;
 	msg->data.out_response_len = 0;
-	msg->error = 0;
 }
 
 static inline void *rpmi_mbox_get_msg_response(struct rpmi_mbox_message *msg)
@@ -227,17 +222,8 @@ static inline void *rpmi_mbox_get_msg_response(struct rpmi_mbox_message *msg)
 static inline int rpmi_mbox_send_message(struct mbox_chan *chan,
 					 struct rpmi_mbox_message *msg)
 {
-	int ret;
-
-	/* Send message for the underlying mailbox channel */
-	ret = mbox_send_message(chan, msg);
-	if (ret < 0)
-		return ret;
-
-	/* Explicitly signal txdone for mailbox channel */
-	ret = msg->error;
-	mbox_client_txdone(chan, ret);
-	return ret;
+	/* Send message for the underlying mailbox channel synchronously */
+	return mbox_send_message_sync(chan, msg);
 }
 
 #endif /* _LINUX_RISCV_RPMI_MESSAGE_H_ */
