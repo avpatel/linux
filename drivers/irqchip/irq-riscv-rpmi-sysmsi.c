@@ -224,7 +224,7 @@ static int rpmi_sysmsi_probe(struct platform_device *pdev)
 	priv->client.dev		= priv->dev;
 	priv->client.rx_callback	= NULL;
 	priv->client.tx_block		= false;
-	priv->client.knows_txdone	= true;
+	priv->client.tx_sync		= true;
 	priv->client.tx_tout		= 0;
 
 	/* Request mailbox channel */
