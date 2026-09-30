@@ -280,6 +280,10 @@ struct arch_hw_breakpoint {
 	unsigned long address;
 	unsigned long len;
 	unsigned int type;
+
+	/* Single-step callback info */
+	unsigned long next_addr;
+	bool in_callback;
 	unsigned int match;
 	unsigned int chain;
 	unsigned int select;
@@ -289,6 +293,11 @@ struct arch_hw_breakpoint {
 	unsigned long tdata1;
 	unsigned long tdata2;
 	unsigned long tdata3;
+
+	/* Saved trigger config for single-step restore */
+	unsigned long saved_tdata1;
+	unsigned long saved_tdata2;
+	unsigned long saved_tdata3;
 };
 
 struct perf_event_attr;

@@ -11,9 +11,12 @@
 #include <linux/percpu.h>
 #include <linux/kdebug.h>
 #include <linux/bitops.h>
+#include <linux/bitfield.h>
+#include <linux/math.h>
 #include <linux/cpu.h>
 #include <linux/cpuhotplug.h>
 
+#include <asm/insn.h>
 #include <asm/sbi.h>
 
 /* Registered per-cpu bp/wp */
@@ -328,8 +331,11 @@ int hw_breakpoint_arch_parse(struct perf_event *bp,
 
 	/* Breakpoint address */
 	hw->address = attr->bp_addr;
+	hw->tdata1 = 0;
 	hw->tdata2 = attr->bp_addr;
 	hw->tdata3 = 0x0;
+	hw->next_addr = 0x0;
+	hw->in_callback = false;
 
 	switch (dbtr_type) {
 	case RISCV_DBTR_TRIG_MCONTROL:
@@ -345,6 +351,93 @@ int hw_breakpoint_arch_parse(struct perf_event *bp,
 	}
 
 	return ret;
+}
+
+static ulong get_step_address(struct pt_regs *regs, ulong insn)
+{
+	return get_next_insn_address(regs, insn, regs->epc);
+}
+
+/*
+ * setup_singlestep - Set the breakpoint to next instruction after current breakpoint.
+ */
+static int setup_singlestep(struct perf_event *event, struct pt_regs *regs)
+{
+	struct arch_hw_breakpoint *bp = counter_arch_bp(event);
+	unsigned long insn, next_addr = 0;
+	int ret;
+	struct arch_hw_breakpoint tmp = {};
+
+	/*
+	 * Save the original trigger configuration so we can restore it
+	 * after the single-step fires.
+	 */
+	bp->saved_tdata1 = bp->tdata1;
+	bp->saved_tdata2 = bp->tdata2;
+	bp->saved_tdata3 = bp->tdata3;
+
+	ret = get_insn_safe(regs, regs->epc, &insn);
+	if (ret < 0)
+		return ret;
+
+	next_addr = get_step_address(regs, insn);
+
+	/*
+	 * Software path: update the trigger in-place to an execute
+	 * breakpoint at next_addr.  Build the tdata directly without
+	 * calling hw_breakpoint_arch_parse() so that bp->len, bp->type
+	 * and bp->address are not overwritten and remain valid for the
+	 * handler's matching logic after restore.
+	 */
+	tmp.tdata1 = 0;
+	tmp.tdata2 = next_addr;
+	tmp.tdata3 = 0;
+	switch (dbtr_type) {
+	case RISCV_DBTR_TRIG_MCONTROL6:
+		RISCV_DBTR_SET_MC6_EXEC_BIT(tmp.tdata1);
+		tmp.tdata1 = RISCV_DBTR_SET_MC6_SIZE(tmp.tdata1, 0);
+		tmp.tdata1 = RISCV_DBTR_SET_MC6_TYPE(tmp.tdata1,
+						     RISCV_DBTR_TRIG_MCONTROL6);
+		CLEAR_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC6_DMODE_BIT);
+		CLEAR_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC6_TIMING_BIT);
+		CLEAR_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC6_SELECT_BIT);
+		CLEAR_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC6_ACTION_BIT);
+		CLEAR_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC6_CHAIN_BIT);
+		CLEAR_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC6_MATCH_BIT);
+		CLEAR_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC6_M_BIT);
+		CLEAR_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC6_VS_BIT);
+		CLEAR_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC6_VU_BIT);
+		SET_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC6_S_BIT);
+		SET_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC6_U_BIT);
+		break;
+	case RISCV_DBTR_TRIG_MCONTROL:
+		RISCV_DBTR_SET_MC_EXEC_BIT(tmp.tdata1);
+		tmp.tdata1 = RISCV_DBTR_SET_MC_SIZELO(tmp.tdata1, 0);
+		tmp.tdata1 = RISCV_DBTR_SET_MC_SIZEHI(tmp.tdata1, 0);
+		tmp.tdata1 = RISCV_DBTR_SET_MC_TYPE(tmp.tdata1,
+						    RISCV_DBTR_TRIG_MCONTROL);
+		CLEAR_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC_DMODE_BIT);
+		CLEAR_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC_TIMING_BIT);
+		CLEAR_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC_SELECT_BIT);
+		CLEAR_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC_ACTION_BIT);
+		CLEAR_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC_CHAIN_BIT);
+		CLEAR_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC_MATCH_BIT);
+		CLEAR_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC_M_BIT);
+		SET_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC_S_BIT);
+		SET_DBTR_BIT(tmp.tdata1, RISCV_DBTR_MC_U_BIT);
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	bp->tdata1 = tmp.tdata1;
+	bp->tdata2 = next_addr;
+	bp->tdata3 = 0;
+	arch_update_hw_breakpoint(event);
+
+	bp->in_callback = true;
+	bp->next_addr = next_addr;
+	return 0;
 }
 
 /*
@@ -401,10 +494,10 @@ out:
  */
 static int hw_breakpoint_handler(struct die_args *args)
 {
-	int ret = NOTIFY_DONE;
+	int i, ret = 0, bp_ret = NOTIFY_DONE;
+	bool expecting_callback = false;
 	struct arch_hw_breakpoint *bp;
 	struct perf_event *event;
-	int i;
 
 	for (i = 0; i < dbtr_total_num; i++) {
 		event = this_cpu_read(pcpu_hw_bp_events[i]);
@@ -412,85 +505,122 @@ static int hw_breakpoint_handler(struct die_args *args)
 			continue;
 
 		bp = counter_arch_bp(event);
-		switch (bp->type) {
+
+		if (bp->in_callback) {
+			expecting_callback = true;
+			if (args->regs->epc != bp->next_addr)
+				continue;
+
+			arch_uninstall_hw_breakpoint(event);
+
+			/* Restore original breakpoint */
+			if (hw_breakpoint_arch_parse(NULL, &event->attr, bp))
+				goto exit;
+
+			if (arch_install_hw_breakpoint(event))
+				goto exit;
+
+			bp->in_callback = false;
+			bp_ret = NOTIFY_STOP;
+			goto exit;
+		}
+
+		switch (event->attr.bp_type) {
 		/* Breakpoint */
 		case HW_BREAKPOINT_X:
-		{
-			bool hit = bp->address == args->regs->epc;
+			{
+				bool hit = bp->address == args->regs->epc;
 
-			if (!hit && dbtr_type == RISCV_DBTR_TRIG_MCONTROL6)
-				hit = mc6_read_and_clear_hit(i) != RISCV_DBTR_MC6_HIT_FALSE;
+				if (!hit && dbtr_type == RISCV_DBTR_TRIG_MCONTROL6)
+					hit = mc6_read_and_clear_hit(i) != RISCV_DBTR_MC6_HIT_FALSE;
 
-			if (hit) {
-				perf_bp_event(event, args->regs);
-				ret = NOTIFY_STOP;
+				if (hit) {
+					perf_bp_event(event, args->regs);
+					ret = setup_singlestep(event, args->regs);
+					if (ret < 0) {
+						pr_err("Single step setup failed: %d.\n", ret);
+						goto exit;
+					}
+					bp_ret = NOTIFY_STOP;
+					goto exit;
+				}
 			}
 			break;
-		}
 
 		/* Watchpoint */
 		case HW_BREAKPOINT_W:
 		case HW_BREAKPOINT_R:
 		case HW_BREAKPOINT_RW:
-		{
-			unsigned long stval = args->regs->badaddr;
-			unsigned long bp_start = bp->address;
-			unsigned long bp_len = bp->len ?: 1;
-			unsigned long bp_end = bp_start + bp_len - 1;
-			unsigned long stval_end = stval + sizeof(long) - 1;
-			bool hit = false;
+			{
+				unsigned long stval = args->regs->badaddr;
+				unsigned long bp_start = bp->address;
+				unsigned long bp_len = bp->len ?: 1;
+				unsigned long bp_end = bp_start + bp_len - 1;
+				unsigned long stval_end = stval + sizeof(long) - 1;
+				bool hit = false;
 
-			if (bp_end < bp_start)
-				bp_end = ~0UL;
-			if (stval_end < stval)
-				stval_end = ~0UL;
+				if (bp_end < bp_start)
+					bp_end = ~0UL;
+				if (stval_end < stval)
+					stval_end = ~0UL;
 
-			/*
-			 * Prefer tdata1.hit from SBI trigger readout whenever
-			 * possible. Fall back to address-based matching if HIT
-			 * isn't observed/supported.
-			 */
-			if (dbtr_type == RISCV_DBTR_TRIG_MCONTROL) {
-				unsigned long tdata1;
-				struct sbiret sret;
-				union sbi_dbtr_shmem_entry *shmem;
+				/*
+				 * Prefer tdata1.hit from SBI trigger readout whenever
+				 * possible. Fall back to address-based matching if HIT
+				 * isn't observed/supported.
+				 */
+				if (dbtr_type == RISCV_DBTR_TRIG_MCONTROL) {
+					unsigned long tdata1;
+					struct sbiret sret;
+					union sbi_dbtr_shmem_entry *shmem;
 
-				raw_spin_lock_irqsave(this_cpu_ptr(&ecall_lock),
-						      *this_cpu_ptr(&ecall_lock_flags));
-				shmem = this_cpu_ptr(sbi_dbtr_shmem);
-				sret = sbi_ecall(SBI_EXT_DBTR, SBI_EXT_DBTR_TRIG_READ,
-						 i, 1, 0, 0, 0, 0);
-				if (!sret.error) {
-					tdata1 = le_to_cpu(shmem->data.tdata1);
-					hit = !!(tdata1 & RISCV_DBTR_MC_HIT_BIT_MASK);
+					raw_spin_lock_irqsave(this_cpu_ptr(&ecall_lock),
+							      *this_cpu_ptr(&ecall_lock_flags));
+					shmem = this_cpu_ptr(sbi_dbtr_shmem);
+					sret = sbi_ecall(SBI_EXT_DBTR, SBI_EXT_DBTR_TRIG_READ,
+							 i, 1, 0, 0, 0, 0);
+					if (!sret.error) {
+						tdata1 = le_to_cpu(shmem->data.tdata1);
+						hit = !!(tdata1 & RISCV_DBTR_MC_HIT_BIT_MASK);
+					}
+					raw_spin_unlock_irqrestore(this_cpu_ptr(&ecall_lock),
+								   *this_cpu_ptr(&ecall_lock_flags));
+				} else if (dbtr_type == RISCV_DBTR_TRIG_MCONTROL6) {
+					hit = mc6_read_and_clear_hit(i) != RISCV_DBTR_MC6_HIT_FALSE;
 				}
-				raw_spin_unlock_irqrestore(this_cpu_ptr(&ecall_lock),
-							   *this_cpu_ptr(&ecall_lock_flags));
-			} else if (dbtr_type == RISCV_DBTR_TRIG_MCONTROL6) {
-				hit = mc6_read_and_clear_hit(i) != RISCV_DBTR_MC6_HIT_FALSE;
-			}
 
-			/*
-			 * Sdtrig may report STVAL as the lowest accessed
-			 * address while the watchpoint can match a higher byte
-			 * in the same access.
-			 */
-			if (hit ||
-			    (stval >= bp_start && stval <= bp_end) ||
-			    (bp_start >= stval && bp_start <= stval_end)) {
-				perf_bp_event(event, args->regs);
-				ret = NOTIFY_STOP;
+				/*
+				 * Sdtrig may report STVAL as the lowest accessed
+				 * address while the watchpoint can match a higher byte
+				 * in the same access.
+				 */
+				if (hit ||
+				    (stval >= bp_start && stval <= bp_end) ||
+				    (bp_start >= stval && bp_start <= stval_end)) {
+					perf_bp_event(event, args->regs);
+					ret = setup_singlestep(event, args->regs);
+					if (ret < 0) {
+						pr_err("setup_singlestep failed %d.\n", ret);
+						goto exit;
+					}
+					bp_ret = NOTIFY_STOP;
+					goto exit;
+				}
 			}
 			break;
-		}
 
 		default:
-			pr_warn("Unknown type: %u\n", bp->type);
-			break;
+			pr_warn("Unknown type: %u\n", event->attr.bp_type);
+			goto exit;
 		}
 	}
 
-	return ret;
+	if (expecting_callback) {
+		pr_err("in_callback set but epc (%lx) not at next_addr (%lx).\n",
+		       args->regs->epc, bp->next_addr);
+	}
+exit:
+	return bp_ret;
 }
 
 int hw_breakpoint_exceptions_notify(struct notifier_block *unused,
