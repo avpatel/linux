@@ -54,7 +54,7 @@ asm (
 	"ret\n"
 	".popsection\n");
 #else
-static void __test_function(volatile long *ptr)
+static noinline void __test_function(volatile long *ptr)
 {
 	*ptr = 0x1234;
 }
