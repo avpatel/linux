@@ -2,3 +2,6 @@
 
 obj-$(CONFIG_GTRACE) += gtrace.o
 gtrace-y := gtrace-core.o
+gtrace-$(CONFIG_OF) += gtrace-of.o
+
+obj-$(CONFIG_RVTRACE) += rvtrace-platform.o
