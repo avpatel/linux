@@ -7,62 +7,70 @@
 #include <linux/export.h>
 #include <linux/gtrace.h>
 #include <linux/of.h>
-#include <linux/of_graph.h>
 #include <linux/property.h>
 
 /*
- * Parse the "out-ports" graph of the component's device tree node and fill
+ * Parse the "out-ports" graph of the component's node and fill
  * pdata->outconns.
  * Return: 0 on success or when there are no output ports
  *         -EPROBE_DEFER if a destination is not registered yet
  *         negative error code otherwise.
  */
-int gtrace_of_parse_outconns(struct gtrace_platform_data *pdata)
+int gtrace_parse_outconns(struct gtrace_platform_data *pdata)
 {
-	struct device_node *parent, *ep_node, *rep_node, *rdev_node;
+	struct fwnode_handle *parent, *ep_node, *rep_node, *rdev_node;
+	struct fwnode_endpoint ep = { 0 };
+	struct fwnode_endpoint rep = { 0 };
 	struct gtrace_connection *conn;
-	struct of_endpoint ep, rep;
+	unsigned int nr_outconns;
 	int ret = 0, i = 0;
 
-	parent = of_get_child_by_name(dev_of_node(pdata->dev), "out-ports");
+	parent = fwnode_get_named_child_node(dev_fwnode(pdata->dev), "out-ports");
 	if (!parent)
 		return 0;
 
-	pdata->nr_outconns = of_graph_get_endpoint_count(parent);
-	pdata->outconns = devm_kcalloc(pdata->dev, pdata->nr_outconns,
+	nr_outconns = fwnode_graph_get_endpoint_count(parent, 0);
+	pdata->nr_outconns = nr_outconns;
+	pdata->outconns = devm_kcalloc(pdata->dev, nr_outconns,
 				       sizeof(*pdata->outconns), GFP_KERNEL);
 	if (!pdata->outconns) {
 		ret = -ENOMEM;
 		goto done;
 	}
 
-	for_each_endpoint_of_node(parent, ep_node) {
+	fwnode_graph_for_each_endpoint(parent, ep_node) {
 		conn = devm_kzalloc(pdata->dev, sizeof(*conn), GFP_KERNEL);
 		if (!conn) {
-			of_node_put(ep_node);
+			fwnode_handle_put(ep_node);
 			ret = -ENOMEM;
 			break;
 		}
 
-		ret = of_graph_parse_endpoint(ep_node, &ep);
+		ret = fwnode_graph_parse_endpoint(ep_node, &ep);
 		if (ret) {
-			of_node_put(ep_node);
+			fwnode_handle_put(ep_node);
 			break;
 		}
 
-		rep_node = of_graph_get_remote_endpoint(ep_node);
+		rep_node = fwnode_graph_get_remote_endpoint(ep_node);
 		if (!rep_node) {
 			ret = -ENODEV;
-			of_node_put(ep_node);
+			fwnode_handle_put(ep_node);
 			break;
 		}
-		rdev_node = of_graph_get_port_parent(rep_node);
+		rdev_node = fwnode_graph_get_port_parent(rep_node);
+		if (!rdev_node) {
+			ret = -ENODEV;
+			fwnode_handle_put(ep_node);
+			fwnode_handle_put(rep_node);
+			break;
+		}
 
-		ret = of_graph_parse_endpoint(rep_node, &rep);
+		ret = fwnode_graph_parse_endpoint(rep_node, &rep);
 		if (ret) {
-			of_node_put(ep_node);
-			of_node_put(rep_node);
-			of_node_put(rdev_node);
+			fwnode_handle_put(ep_node);
+			fwnode_handle_put(rep_node);
+			fwnode_handle_put(rdev_node);
 			break;
 		}
 
@@ -71,20 +79,24 @@ int gtrace_of_parse_outconns(struct gtrace_platform_data *pdata)
 		/* The 'src_comp' is set by gtrace_register_component() */
 		conn->src_comp = NULL;
 		conn->dest_port = rep.port;
-		conn->dest_fwnode = of_fwnode_handle(rdev_node);
+		conn->dest_fwnode = rdev_node;
 		fwnode_handle_get(conn->dest_fwnode);
 		conn->dest_comp = gtrace_find_by_fwnode(conn->dest_fwnode);
 		if (!conn->dest_comp) {
 			ret = -EPROBE_DEFER;
-			of_node_put(ep_node);
-			of_node_put(rep_node);
-			of_node_put(rdev_node);
+			fwnode_handle_put(ep_node);
+			fwnode_handle_put(rep_node);
+			fwnode_handle_put(rdev_node);
 			break;
 		}
 
-		pdata->outconns[i] = conn;
-		i++;
+		pdata->outconns[i++] = conn;
+		fwnode_handle_put(rep_node);
+		fwnode_handle_put(rdev_node);
 	}
+
+	if (!ret)
+		pdata->nr_outconns = i;
 
 done:
 	if (ret) {
@@ -94,10 +106,11 @@ done:
 				fwnode_handle_put(conn->dest_fwnode);
 		}
 	}
-	of_node_put(parent);
+
+	fwnode_handle_put(parent);
 	return ret;
 }
-EXPORT_SYMBOL_GPL(gtrace_of_parse_outconns);
+EXPORT_SYMBOL_GPL(gtrace_parse_outconns);
 
 /*
  * Parse the "out-ports" graph of the component's device tree node and allocate
@@ -105,22 +118,23 @@ EXPORT_SYMBOL_GPL(gtrace_of_parse_outconns);
  *
  * Return: 0 on success or when there are no input ports, -ENOMEM otherwise.
  */
-int gtrace_of_parse_inconns(struct gtrace_platform_data *pdata)
+int gtrace_parse_inconns(struct gtrace_platform_data *pdata)
 {
-	struct device_node *parent;
+	struct fwnode_handle *parent;
 	int ret = 0;
 
-	parent = of_get_child_by_name(dev_of_node(pdata->dev), "in-ports");
+	parent = fwnode_get_named_child_node(dev_fwnode(pdata->dev), "in-ports");
 	if (!parent)
 		return 0;
 
-	pdata->nr_inconns = of_graph_get_endpoint_count(parent);
+	pdata->nr_inconns = fwnode_graph_get_endpoint_count(parent,
+							    FWNODE_GRAPH_DEVICE_DISABLED);
 	pdata->inconns = devm_kcalloc(pdata->dev, pdata->nr_inconns,
 				      sizeof(*pdata->inconns), GFP_KERNEL);
 	if (!pdata->inconns)
 		ret = -ENOMEM;
 
-	of_node_put(parent);
+	fwnode_handle_put(parent);
 	return ret;
 }
-EXPORT_SYMBOL_GPL(gtrace_of_parse_inconns);
+EXPORT_SYMBOL_GPL(gtrace_parse_inconns);
