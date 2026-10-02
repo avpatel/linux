@@ -2,7 +2,7 @@
 
 menuconfig GTRACE
 	tristate "Generic Hardware Trace Support"
-	depends on OF
+	depends on OF || ACPI
 	select PERF_EVENTS
 	help
 	  This framework provides an architecture-neutral kernel interface
@@ -18,7 +18,7 @@ menuconfig GTRACE
 config RVTRACE
 	tristate "RISC-V Trace Support"
 	depends on RISCV
-	depends on OF
+	depends on OF || ACPI
 	depends on GTRACE
 	default RISCV
 	help

@@ -240,8 +240,8 @@ struct gtrace_component *gtrace_register_component(struct gtrace_component_id *i
 						   struct gtrace_platform_data *pdata);
 void gtrace_unregister_component(struct gtrace_component *comp);
 
-int gtrace_of_parse_outconns(struct gtrace_platform_data *pdata);
-int gtrace_of_parse_inconns(struct gtrace_platform_data *pdata);
+int gtrace_parse_outconns(struct gtrace_platform_data *pdata);
+int gtrace_parse_inconns(struct gtrace_platform_data *pdata);
 
 /**
  * struct gtrace_path - Representation of a trace path from source to sink.
