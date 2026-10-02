@@ -60,6 +60,45 @@ const struct gtrace_hw_ops rvtrace_hw_ops = {
 	.reset		= rvtrace_hw_reset,
 };
 
+#ifdef CONFIG_OF
+static int of_rvtrace_get_cpu(struct device *dev)
+{
+	struct device_node *dn;
+	int cpu;
+
+	if (!dev->of_node)
+		return -1;
+
+	dn = of_parse_phandle(dev->of_node, "cpus", 0);
+	if (!dn)
+		return -1;
+
+	cpu = of_cpu_node_to_id(dn);
+	of_node_put(dn);
+
+	return cpu;
+}
+#else
+static int of_rvtrace_get_cpu(struct device *dev)
+{
+	return -1;
+}
+#endif
+
+/*
+ * rvtrace_get_cpu - Find the logical CPU id of the CPU associated
+ * with this rvtrace device.
+ *
+ * Returns the logical CPU id when found.
+ */
+static int rvtrace_get_cpu(struct device *dev)
+{
+	if (is_of_node(dev_fwnode(dev)))
+		return of_rvtrace_get_cpu(dev);
+
+	return -1;
+}
+
 static int rvtrace_platform_probe(struct platform_device *pdev)
 {
 	struct gtrace_platform_data *pdata;
@@ -67,7 +106,6 @@ static int rvtrace_platform_probe(struct platform_device *pdev)
 	struct gtrace_component_id id;
 	struct gtrace_component *comp;
 	u32 impl, type, major, minor;
-	struct device_node *node;
 	struct resource *res;
 	int gtype;
 	int ret;
@@ -89,24 +127,20 @@ static int rvtrace_platform_probe(struct platform_device *pdev)
 	if (!pdata->base)
 		return dev_err_probe(dev, -ENOMEM, "failed to ioremap %pR\n", res);
 
-	pdata->bound_cpu = -1;
-	node = of_parse_phandle(dev_of_node(dev), "cpus", 0);
-	if (node) {
-		ret = of_cpu_node_to_id(node);
-		of_node_put(node);
-		if (ret < 0)
-			return dev_err_probe(dev, ret, "failed to get CPU id for %pOF\n", node);
-		pdata->bound_cpu = ret;
-	}
+
+	pdata->bound_cpu = rvtrace_get_cpu(dev);
+	if (pdata->bound_cpu < 0)
+		return dev_err_probe(dev, pdata->bound_cpu,
+				     "failed to get bound CPU\n");
 
 	/* Default control poll timeout */
 	pdata->control_poll_timeout_usecs = 10;
 
-	ret = gtrace_of_parse_outconns(pdata);
+	ret = gtrace_parse_outconns(pdata);
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to parse output connections\n");
 
-	ret = gtrace_of_parse_inconns(pdata);
+	ret = gtrace_parse_inconns(pdata);
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to parse input connections\n");
 
