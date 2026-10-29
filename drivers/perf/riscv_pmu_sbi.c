@@ -10,6 +10,7 @@
 
 #define pr_fmt(fmt) "riscv-pmu-sbi: " fmt
 
+#include <linux/bitfield.h>
 #include <linux/perf/riscv_pmu.h>
 #include <linux/platform_device.h>
 #include <linux/irq.h>
@@ -63,9 +64,16 @@ asm volatile(ALTERNATIVE(						\
 
 PMU_FORMAT_ATTR(event, "config:0-55");
 PMU_FORMAT_ATTR(firmware, "config:62-63");
+PMU_FORMAT_ATTR(pesa, "config:56");
+
+#define RISCV_PMU_PESA_EVENT	BIT_ULL(56)
 
 static bool sbi_v2_available;
 static bool sbi_v3_available;
+static bool sspesa_available;
+static bool ssplcofi_available;
+static bool (*pmu_sbi_sspesa_derive_pc)(unsigned long *pc, unsigned long sdata);
+
 static DEFINE_STATIC_KEY_FALSE(sbi_pmu_snapshot_available);
 #define sbi_pmu_snapshot_available() \
 	static_branch_unlikely(&sbi_pmu_snapshot_available)
@@ -73,6 +81,7 @@ static DEFINE_STATIC_KEY_FALSE(sbi_pmu_snapshot_available);
 static struct attribute *riscv_arch_formats_attr[] = {
 	&format_attr_event.attr,
 	&format_attr_firmware.attr,
+	&format_attr_pesa.attr,
 	NULL,
 };
 
@@ -669,6 +678,29 @@ static bool pmu_sbi_is_fw_event(struct perf_event *event)
 		return false;
 }
 
+/*
+ * Check if this event can claim precise attribution on this platform. Only hardware raw
+ * events can claim precise attribution support.
+ */
+static bool pmu_sbi_is_pesa_event(struct perf_event *event)
+{
+	u64 config = event->attr.config;
+
+	if (!sspesa_available || event->attr.type != PERF_TYPE_RAW || config >> 62)
+		return false;
+
+	return config & RISCV_PMU_PESA_EVENT;
+}
+
+/* Check if this event can fulfill the precise_ip level requested by the user */
+static int pmu_sbi_precise_max(struct perf_event *event)
+{
+	if (!pmu_sbi_is_pesa_event(event) || !pmu_sbi_sspesa_derive_pc)
+		return 0;
+
+	return ssplcofi_available ? 3 : 2;
+}
+
 static int pmu_sbi_event_map(struct perf_event *event, u64 *econfig)
 {
 	u32 type = event->attr.type;
@@ -679,6 +711,12 @@ static int pmu_sbi_event_map(struct perf_event *event, u64 *econfig)
 	 * validity before allowing userspace to configure any events.
 	 */
 	flush_work(&check_std_events_work);
+
+	if (event->attr.precise_ip > pmu_sbi_precise_max(event))
+		return -EOPNOTSUPP;
+
+	if (type == PERF_TYPE_RAW && !(config >> 62))
+		config &= ~RISCV_PMU_PESA_EVENT;
 
 	return riscv_pmu_get_event_info(type, config, econfig);
 }
@@ -1193,6 +1231,77 @@ static void pmu_sbi_sse_enable(struct pmu *pmu)
 }
 #endif
 
+/*
+ * Build regs for the perf backend as follows:
+ * 'U' mode samples - task_pt_regs
+ * 'S' mode samples - irq regs
+ * 'V' bit set - fallback to irq regs for now
+ */
+
+static bool pmu_sbi_sspesa_regs(struct pt_regs *perf_regs, struct pt_regs *regs,
+				unsigned long pc, unsigned long sdata)
+{
+	int mode = FIELD_GET(SHPMSDATA_MODE, sdata);
+
+	/* Virtualization not supported yet */
+	if (sdata & SHPMSDATA_V)
+		return false;
+
+	switch (mode) {
+	case SHPMSDATA_MODE_U:
+		/*
+		 * Hardware indicates 'U' mode but current task is not a userspace task,
+		 * so perf_regs should be left untouched.
+		 */
+		if (!is_user_task(current))
+			return false;
+		*perf_regs = *task_pt_regs(current);
+		break;
+	case SHPMSDATA_MODE_S:
+		*perf_regs = *regs;
+		perf_regs->status |= SR_PP;
+		if (user_mode(regs)) {
+			/*
+			 * shpmspc was recorded in 'S' mode but interrupt was delivered in 'U'
+			 * mode due to which perf_regs can't retain 'U' mode stack frame.
+			 */
+			perf_regs->s0 = 0;
+			perf_regs->sp = 0;
+		}
+		break;
+	default:
+		return false;
+	}
+
+	/* Update the epc to the more precise PC derived from shpmspc */
+	perf_regs->epc = pc;
+	return true;
+}
+
+/* QEMU hardwires shpmsdata[63:8] to 0 by default and so shpmspc needs no adjustment. */
+static bool pmu_sbi_sspesa_pc(unsigned long *pc, unsigned long sdata)
+{
+	return !(sdata >> SHPMSDATA_METADATA_SHIFT);
+}
+
+/*
+ * Following is a tentative guideline in the spec that if shpmsdata is not hardwired to 0 and no
+ * custom algorithm is reported then software shouldn't report support for precise attribution.
+ * The pmu_sbi_sspesa_derive_pc is responsible for implementing the custom algorithm and must be
+ * set per vendor and implementation during probe. If it isn't set then precise attribution is
+ * not supported for that vendor and implementation.
+ */
+static void pmu_sbi_sspesa_setup(void)
+{
+	switch (riscv_cached_mvendorid(0)) {
+	case 0:
+		pmu_sbi_sspesa_derive_pc = pmu_sbi_sspesa_pc;
+		break;
+	default:
+		break;
+	}
+}
+
 static irqreturn_t pmu_sbi_ovf_handler(struct cpu_hw_events *cpu_hw_evt,
 				       struct pt_regs *regs, bool from_sse,
 				       bool from_guest)
@@ -1207,6 +1316,11 @@ static irqreturn_t pmu_sbi_ovf_handler(struct cpu_hw_events *cpu_hw_evt,
 	u64 overflowed_ctrs = 0;
 	u64 start_clock = sched_clock();
 	struct riscv_pmu_snapshot_data *sdata;
+	unsigned long sample_pc = 0;
+	unsigned long sample_data = 0;
+	int sample_cntrid, cur_cntrid;
+	bool sample_pc_valid = false;
+	struct pt_regs perf_regs, *sample_regs;
 
 	if (WARN_ON_ONCE(!cpu_hw_evt))
 		return IRQ_NONE;
@@ -1245,6 +1359,21 @@ static irqreturn_t pmu_sbi_ovf_handler(struct cpu_hw_events *cpu_hw_evt,
 		overflow = sdata->ctr_overflow_mask;
 	else
 		ALT_SBI_PMU_OVERFLOW(overflow);
+
+	/*
+	 * Sspesa records the PC and metadata of the overflowing counter in
+	 * hardware. The PC is precise only for events that support precise
+	 * attribution; otherwise it is best-effort.
+	 */
+	if (overflow && sspesa_available) {
+		sample_pc = csr_read(CSR_SHPMSPC);
+		sample_data = csr_read(CSR_SHPMSDATA);
+		csr_write(CSR_SHPMSDATA, 0);
+		sample_cntrid = sample_data & SHPMSDATA_CNTRID;
+		if (pmu_sbi_sspesa_derive_pc)
+			sample_pc_valid = pmu_sbi_sspesa_derive_pc(&sample_pc,
+								sample_data);
+	}
 
 	/*
 	 * Overflow interrupt pending bit should only be cleared after stopping
@@ -1300,6 +1429,16 @@ static irqreturn_t pmu_sbi_ovf_handler(struct cpu_hw_events *cpu_hw_evt,
 		riscv_pmu_event_update(event);
 		hw_evt->state |= PERF_HES_UPTODATE;
 		perf_sample_data_init(&data, 0, hw_evt->last_period);
+		sample_regs = regs;
+		cur_cntrid = pmu_sbi_csr_index(event);
+		/* Update the regs if the current event caused the overflow */
+		if (sample_pc_valid && cur_cntrid == sample_cntrid) {
+			if (pmu_sbi_sspesa_regs(&perf_regs, regs, sample_pc, sample_data)) {
+				sample_regs = &perf_regs;
+				if (ssplcofi_available && pmu_sbi_is_pesa_event(event))
+					sample_regs->status |= PERF_SR_PRECISE;
+			}
+		}
 		if (riscv_pmu_event_set_period(event)) {
 			int overflow_ret;
 
@@ -1317,7 +1456,7 @@ static irqreturn_t pmu_sbi_ovf_handler(struct cpu_hw_events *cpu_hw_evt,
 			 * TODO: We will need to stop the guest counters once
 			 * virtualization support is added.
 			 */
-			overflow_ret = perf_event_overflow(event, &data, regs);
+			overflow_ret = perf_event_overflow(event, &data, sample_regs);
 			if (!overflow_ret)
 				hw_evt->state = 0;
 		} else {
@@ -1880,6 +2019,15 @@ static int pmu_sbi_device_probe(struct platform_device *pdev)
 		pmu->pmu.pmu_disable = pmu_sbi_sse_disable;
 	}
 #endif
+
+	if (riscv_isa_extension_available(NULL, SSPESA) &&
+	    riscv_isa_extension_available(NULL, SMCDELEG)) {
+		sspesa_available = true;
+		pmu_sbi_sspesa_setup();
+	}
+
+	if (riscv_isa_extension_available(NULL, SSPLCOFI))
+		ssplcofi_available = true;
 
 	pmu->pmu.attr_groups = riscv_pmu_attr_groups;
 	pmu->pmu.parent = &pdev->dev;
