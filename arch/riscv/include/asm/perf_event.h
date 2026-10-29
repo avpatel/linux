@@ -9,6 +9,14 @@
 #define _ASM_RISCV_PERF_EVENT_H
 
 #ifdef CONFIG_PERF_EVENTS
+/* Use sstatus bit 2 to convey whether an epc in the sample is precise or not */
+#define PERF_SR_PRECISE	_AC(0x00000004, UL)
+
+struct pt_regs;
+extern unsigned long perf_arch_misc_flags(struct pt_regs *regs);
+#define perf_arch_misc_flags(regs)	perf_arch_misc_flags(regs)
+#define perf_arch_instruction_pointer(regs)	instruction_pointer(regs)
+
 #include <linux/perf_event.h>
 #define perf_arch_bpf_user_pt_regs(regs) (struct user_regs_struct *)regs
 
