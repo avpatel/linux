@@ -269,6 +269,18 @@ properties:
             ratified at commit d70011dde6c2 ("Update to ratified state")
             of riscv-j-extension.
 
+        - const: sspesa
+          description: |
+            The standard Sspesa supervisor-level extension for precise event
+            sample attribution, as defined in the RISC-V Performance Event
+            Sampling specification.
+
+        - const: ssplcofi
+          description: |
+            The standard Ssplcofi supervisor-level extension for precise local
+            counter overflow interrupts, as defined in the RISC-V Performance
+            Event Sampling specification. Ssplcofi depends on Sspesa.
+
         - const: ssqosid
           description: |
             The standard Ssqosid extension for Quality of Service ID is
@@ -983,6 +995,20 @@ properties:
                 const: smnpm
             - contains:
                 const: ssnpm
+      # Sspesa depends on Sscofpmf
+      - if:
+          contains:
+            const: sspesa
+        then:
+          contains:
+            const: sscofpmf
+      # Ssplcofi depends on Sspesa
+      - if:
+          contains:
+            const: ssplcofi
+        then:
+          contains:
+            const: sspesa
       # Za64rs and Ziccrse depend on Zalrsc or A
       - if:
           contains:
