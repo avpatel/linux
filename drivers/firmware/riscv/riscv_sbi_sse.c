@@ -161,6 +161,15 @@ static int sse_sbi_event_func(struct sse_event *event, unsigned long func)
 	return 0;
 }
 
+bool sse_event_is_enabled_local(struct sse_event *event)
+{
+	if (!sse_event_is_global(event->evt_id))
+		lockdep_assert_preemption_disabled();
+
+	return sse_get_reg_evt(event)->is_enabled;
+}
+EXPORT_SYMBOL_GPL(sse_event_is_enabled_local);
+
 int sse_event_disable_local(struct sse_event *event)
 {
 	if (!sse_event_is_global(event->evt_id))
