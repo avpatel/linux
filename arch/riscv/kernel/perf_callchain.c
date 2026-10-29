@@ -12,6 +12,21 @@
 #include <asm/sse.h>
 #include <asm/stacktrace.h>
 
+unsigned long perf_arch_misc_flags(struct pt_regs *regs)
+{
+	unsigned long misc;
+
+	if (user_mode(regs))
+		misc = PERF_RECORD_MISC_USER;
+	else
+		misc = PERF_RECORD_MISC_KERNEL;
+
+	if (regs->status & PERF_SR_PRECISE)
+		misc |= PERF_RECORD_MISC_EXACT_IP;
+
+	return misc;
+}
+
 static bool fill_callchain(void *entry, unsigned long pc)
 {
 	return perf_callchain_store(entry, pc) == 0;
