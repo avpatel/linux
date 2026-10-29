@@ -28,6 +28,8 @@
 
 #define RISCV_PMU_CONFIG1_GUEST_EVENTS 0x1
 
+struct sse_event;
+
 struct cpu_hw_events {
 	/* currently enabled events */
 	int			n_events;
@@ -39,6 +41,18 @@ struct cpu_hw_events {
 	DECLARE_BITMAP(used_hw_ctrs, RISCV_MAX_COUNTERS);
 	/* currently enabled firmware counters */
 	DECLARE_BITMAP(used_fw_ctrs, RISCV_MAX_COUNTERS);
+#ifdef CONFIG_RISCV_PMU_SBI_SSE
+	/* Keep counters stopped after an unrecoverable SSE transition failure. */
+	bool sse_failed;
+#endif
+#ifdef CONFIG_CPU_PM
+	/* Counters stopped by CPU PM and still waiting to be restored. */
+	DECLARE_BITMAP(pm_resume_hw_ctrs, RISCV_MAX_COUNTERS);
+#ifdef CONFIG_RISCV_PMU_SBI_SSE
+	/* Restore the local PMU SSE event after counters and userpage state. */
+	bool pm_resume_sse;
+#endif
+#endif
 	/* The virtual address of the shared memory where counter snapshot will be taken */
 	void *snapshot_addr;
 	/* The physical address of the shared memory where counter snapshot will be taken */
@@ -54,6 +68,10 @@ struct riscv_pmu {
 	char		*name;
 
 	irqreturn_t	(*handle_irq)(int irq_num, void *dev);
+#ifdef CONFIG_RISCV_PMU_SBI_SSE
+	struct sse_event	*sse_evt;
+	bool			sse_active;
+#endif
 
 	DECLARE_BITMAP(cmask, RISCV_MAX_COUNTERS);
 	u64		(*ctr_read)(struct perf_event *event);
@@ -63,7 +81,7 @@ struct riscv_pmu {
 	void		(*ctr_start)(struct perf_event *event, u64 init_val);
 	void		(*ctr_stop)(struct perf_event *event, unsigned long flag);
 	int		(*event_map)(struct perf_event *event, u64 *config);
-	void		(*event_init)(struct perf_event *event);
+	int		(*event_init)(struct perf_event *event);
 	void		(*event_mapped)(struct perf_event *event, struct mm_struct *mm);
 	void		(*event_unmapped)(struct perf_event *event, struct mm_struct *mm);
 	uint8_t		(*csr_index)(struct perf_event *event);
