@@ -1350,6 +1350,10 @@ static int riscv_iommu_attach_paging_domain(struct iommu_domain *iommu_domain,
 	if (domain->gscid) {
 		if (!riscv_iommu_iohgatp_supported(iommu, pt_info.iohgatp_mode))
 			return -EINVAL;
+		/* Dirty tracking requires AMO_HWAD on every attached IOMMU */
+		if (iommu_domain->dirty_ops &&
+		    !(iommu->caps & RISCV_IOMMU_CAPABILITIES_AMO_HWAD))
+			return -EINVAL;
 
 		dc.iohgatp =
 			FIELD_PREP(RISCV_IOMMU_DC_IOHGATP_MODE, pt_info.iohgatp_mode) |
@@ -1376,6 +1380,21 @@ static int riscv_iommu_attach_paging_domain(struct iommu_domain *iommu_domain,
 
 	return 0;
 }
+
+static int riscv_iommu_set_dirty_tracking(struct iommu_domain *iommu_domain,
+					  bool enable)
+{
+	/*
+	 * Always enabled and the dirty bitmap is cleared prior to
+	 * set_dirty_tracking().
+	 */
+	return 0;
+}
+
+static const struct iommu_dirty_ops riscv_iommu_dirty_ops = {
+	IOMMU_PT_DIRTY_OPS(riscv_64),
+	.set_dirty_tracking = riscv_iommu_set_dirty_tracking,
+};
 
 static const struct iommu_domain_ops riscv_iommu_paging_domain_ops = {
 	IOMMU_PT_DOMAIN_OPS(riscv_64),
@@ -1418,7 +1437,8 @@ static int riscv_iommu_init_domain_s1(struct device *dev,
  */
 static int riscv_iommu_init_domain_s2(struct device *dev,
 				      struct riscv_iommu_domain *domain,
-				      struct pt_iommu_riscv_64_cfg *cfg)
+				      struct pt_iommu_riscv_64_cfg *cfg,
+				      u32 flags)
 {
 	struct riscv_iommu_device *iommu = dev_to_iommu(dev);
 
@@ -1438,6 +1458,10 @@ static int riscv_iommu_init_domain_s2(struct device *dev,
 					RISCV_IOMMU_MAX_GSCID, GFP_KERNEL);
 	if (domain->gscid < 0)
 		return -ENOMEM;
+
+	/* AMO_HWAD is checked by iommufd via IOMMU_CAP_DIRTY_TRACKING */
+	if (flags & IOMMU_HWPT_ALLOC_DIRTY_TRACKING)
+		domain->domain.dirty_ops = &riscv_iommu_dirty_ops;
 
 	return 0;
 }
@@ -1481,7 +1505,7 @@ riscv_iommu_domain_alloc_paging_flags(struct device *dev, u32 flags,
 	case IOMMU_HWPT_ALLOC_NEST_PARENT:
 	case IOMMU_HWPT_ALLOC_DIRTY_TRACKING:
 	case IOMMU_HWPT_ALLOC_DIRTY_TRACKING | IOMMU_HWPT_ALLOC_NEST_PARENT:
-		ret = riscv_iommu_init_domain_s2(dev, domain, &cfg);
+		ret = riscv_iommu_init_domain_s2(dev, domain, &cfg, flags);
 		break;
 	default:
 		ret = -EOPNOTSUPP;
@@ -1559,9 +1583,13 @@ static struct iommu_group *riscv_iommu_device_group(struct device *dev)
 
 static bool riscv_iommu_capable(struct device *dev, enum iommu_cap cap)
 {
+	struct riscv_iommu_device *iommu = dev_to_iommu(dev);
+
 	switch (cap) {
 	case IOMMU_CAP_CACHE_COHERENCY:
 		return dev_is_dma_coherent(dev);
+	case IOMMU_CAP_DIRTY_TRACKING:
+		return !!(iommu->caps & RISCV_IOMMU_CAPABILITIES_AMO_HWAD);
 	default:
 		return false;
 	}
