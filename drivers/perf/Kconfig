@@ -140,6 +140,22 @@ config ANDES_CUSTOM_PMU
 
 	  If you don't know what to do here, say "Y".
 
+config RISCV_CTR
+	bool "Enable support for Control Transfer Records (CTR)"
+	depends on PERF_EVENTS && RISCV_PMU
+	default y
+	help
+	  Enable support for Control Transfer Records (CTR) which
+	  allows recording branches, Jumps, Calls, returns etc taken in an
+	  execution path. This also supports privilege based filtering. It
+	  captures additional relevant information such as cycle count,
+	  branch misprediction etc.
+
+config RISCV_M_MODE
+		bool "Enable M Mode"
+		depends on RISCV_CTR
+		default n
+
 config ARM_PMU_ACPI
 	depends on ARM_PMU && ACPI
 	def_bool y
