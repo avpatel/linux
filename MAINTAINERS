@@ -24184,9 +24184,11 @@ RISC-V DEBUGGING
 M:	Himanshu Chauhan <himanshu@thechauhan.dev>
 L:	linux-riscv@lists.infradead.org
 F:	arch/riscv/include/asm/hw_breakpoint.h
+F:	arch/riscv/include/asm/insn.h
 F:	arch/riscv/include/asm/perf_event.h
 F:	arch/riscv/kernel/hw_breakpoint.c
 F:	arch/riscv/kernel/perf_*
+F:	arch/riscv/lib/insn.c
 F:	drivers/perf/
 F:	tools/testing/selftests/breakpoints/breakpoint_test_riscv.c
 
