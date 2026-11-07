@@ -15,6 +15,7 @@
 #include <linux/cpu.h>
 #include <linux/cpuhotplug.h>
 
+#include <asm/insn.h>
 #include <asm/sbi.h>
 
 #define RISCV_HW_BP_NUM_MAX	32
@@ -62,6 +63,9 @@ enum {
 #define RISCV_DBTR_MC6_HIT1		BIT(25)
 #define RISCV_DBTR_MC6_HIT_MASK	(RISCV_DBTR_MC6_HIT | RISCV_DBTR_MC6_HIT1)
 
+#define RISCV_DBTR_ICOUNT_U		BIT(6)
+#define RISCV_DBTR_ICOUNT_COUNT_MASK	GENMASK(23, 10)
+
 #define RISCV_DBTR_MC6_HIT_FALSE	0
 #define RISCV_DBTR_MC6_HIT_BEFORE	1
 #define RISCV_DBTR_MC6_HIT_AFTER	2
@@ -77,6 +81,7 @@ static union sbi_dbtr_shmem_entry __percpu *sbi_dbtr_shmem;
 /* number of debug triggers on this cpu . */
 static int dbtr_total_num __ro_after_init;
 static int dbtr_type __ro_after_init;
+static bool dbtr_icount_available __ro_after_init;
 static unsigned long dbtr_init __ro_after_init;
 
 #define MEM_HI(_m)		\
@@ -192,6 +197,17 @@ static void init_sbi_dbtr(void)
 		pr_warn("Failed to detect triggers\n");
 		dbtr_total_num = 0;
 		return;
+	}
+
+	tdata1 = dbtr_tdata1_type(RISCV_DBTR_TRIG_ICOUNT);
+
+	ret = sbi_ecall(SBI_EXT_DBTR, SBI_EXT_DBTR_NUM_TRIGGERS,
+			tdata1, 0, 0, 0, 0, 0);
+	if (ret.error) {
+		pr_warn("Failed to detect icount triggers\n");
+	} else if (ret.value) {
+		dbtr_icount_available = 1;
+		pr_warn("Icount trigger available.\n");
 	}
 
 	tdata1 = dbtr_tdata1_type(RISCV_DBTR_TRIG_MCONTROL6);
@@ -397,6 +413,9 @@ int hw_breakpoint_arch_parse(struct perf_event *bp,
 	hw->tdata1 = 0;
 	hw->tdata2 = attr->bp_addr;
 	hw->tdata3 = 0x0;
+	hw->next_addr = 0x0;
+	hw->step_method = RISCV_HW_BP_STEP_DISABLED;
+	hw->pending_perf_event = false;
 
 	switch (dbtr_type) {
 	case RISCV_DBTR_TRIG_MCONTROL:
@@ -412,6 +431,168 @@ int hw_breakpoint_arch_parse(struct perf_event *bp,
 	}
 
 	return ret;
+}
+
+static ulong get_step_address(struct pt_regs *regs, ulong insn)
+{
+	return get_next_insn_address(regs, insn, regs->epc);
+}
+
+static int dbtr_update_event_tdata(struct perf_event *event,
+				   unsigned long tdata1,
+				   unsigned long tdata2,
+				   unsigned long tdata3, bool wait);
+
+static bool hw_breakpoint_event_active(struct perf_event *event)
+{
+	return READ_ONCE(event->state) == PERF_EVENT_STATE_ACTIVE;
+}
+
+static void clear_singlestep_state(struct arch_hw_breakpoint *bp)
+{
+	bp->step_method = RISCV_HW_BP_STEP_DISABLED;
+	bp->next_addr = 0;
+	bp->pending_perf_event = false;
+}
+
+static void disable_unhandled_singlestep(struct perf_event *event,
+					 struct pt_regs *regs, bool deliver_event,
+					 int err)
+{
+	struct arch_hw_breakpoint *bp = counter_arch_bp(event);
+
+	/*
+	 * If the temporary step trigger cannot be installed or restored, leave
+	 * the CPU with no active trigger instead of re-entering the same debug
+	 * exception forever.
+	 */
+	pr_warn("single-step setup failed for bp_addr=0x%lx epc=0x%lx: %d; disabling event\n",
+		bp->address, regs->epc, err);
+	clear_singlestep_state(bp);
+	if (deliver_event && hw_breakpoint_event_active(event))
+		perf_bp_event(event, regs);
+	if (hw_breakpoint_event_active(event))
+		perf_event_disable_inatomic(event);
+}
+
+static unsigned long icount_step_tdata1(void)
+{
+	return dbtr_tdata1_type(RISCV_DBTR_TRIG_ICOUNT) |
+	       FIELD_PREP(RISCV_DBTR_ICOUNT_COUNT_MASK, 1) |
+	       RISCV_DBTR_ICOUNT_U;
+}
+
+static int restore_original_breakpoint(struct perf_event *event)
+{
+	struct arch_hw_breakpoint *bp = counter_arch_bp(event);
+	int ret;
+
+	/*
+	 * Rebuild the original trigger from the perf attributes instead of
+	 * keeping a second copy of the trigger data.  Do not update the
+	 * temporary trigger in place when changing back from icount/software-step
+	 * mode: uninstall/install gives the original breakpoint a fresh hardware
+	 * slot and clears any transient hit state.
+	 */
+	arch_uninstall_hw_breakpoint(event);
+
+	ret = hw_breakpoint_arch_parse(NULL, &event->attr, bp);
+	if (ret)
+		return ret;
+
+	return arch_install_hw_breakpoint(event);
+}
+
+/*
+ * setup_singlestep - Set the breakpoint to next instruction after current breakpoint.
+ */
+static int setup_singlestep(struct perf_event *event, struct pt_regs *regs)
+{
+	struct arch_hw_breakpoint *bp = counter_arch_bp(event);
+	unsigned long insn, next_addr = 0;
+	int ret;
+	struct arch_hw_breakpoint tmp = {};
+
+	clear_singlestep_state(bp);
+
+	if (dbtr_icount_available && !arch_check_bp_in_kernelspace(bp)) {
+		/*
+		 * User breakpoints can use an icount trigger to retire exactly
+		 * one instruction.  The sdtrig icount path reports EPC after the
+		 * counted instruction, so the callback sees the post-step PC
+		 * without decoding the original instruction here.
+		 */
+		tmp.tdata1 = icount_step_tdata1();
+
+		ret = dbtr_update_event_tdata(event, tmp.tdata1, 0, 0, false);
+		if (ret)
+			return ret;
+
+		bp->step_method = RISCV_HW_BP_STEP_ICOUNT;
+		bp->next_addr = 0;
+		return 0;
+	}
+
+	if (!event->hw.target) {
+		/*
+		 * A CPU-wide software-step trigger follows one task's decoded
+		 * next PC.  If that task migrates, the per-CPU slot may wait
+		 * forever for an address the CPU will not execute.
+		 */
+		return -EOPNOTSUPP;
+	}
+
+	ret = get_insn_safe(regs, regs->epc, &insn);
+	if (ret < 0)
+		return ret;
+
+	next_addr = get_step_address(regs, insn);
+	if (next_addr == regs->epc) {
+		/*
+		 * Some control transfers, notably SRET, cannot be represented
+		 * as an execute breakpoint at a different decoded PC.  Refuse
+		 * the software step rather than programming the same address
+		 * and looping on the original breakpoint.
+		 */
+		return -EOPNOTSUPP;
+	}
+
+	/*
+	 * Software path: update the trigger in-place to an execute
+	 * breakpoint at next_addr.  Build the tdata directly without
+	 * calling hw_breakpoint_arch_parse() so that bp->len and bp->address
+	 * remain valid for the handler's matching logic after restore.
+	 */
+	tmp.tdata2 = next_addr;
+	tmp.tdata3 = 0;
+	switch (dbtr_type) {
+	case RISCV_DBTR_TRIG_MCONTROL6:
+		tmp.tdata1 = dbtr_tdata1_type(RISCV_DBTR_TRIG_MCONTROL6) |
+			     RISCV_DBTR_MC6_EXEC;
+		if (user_mode(regs))
+			tmp.tdata1 |= RISCV_DBTR_MC6_U;
+		else
+			tmp.tdata1 |= RISCV_DBTR_MC6_S;
+		break;
+	case RISCV_DBTR_TRIG_MCONTROL:
+		tmp.tdata1 = dbtr_tdata1_type(RISCV_DBTR_TRIG_MCONTROL) |
+			     RISCV_DBTR_MC_EXEC;
+		if (user_mode(regs))
+			tmp.tdata1 |= RISCV_DBTR_MC_U;
+		else
+			tmp.tdata1 |= RISCV_DBTR_MC_S;
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	ret = dbtr_update_event_tdata(event, tmp.tdata1, next_addr, 0, false);
+	if (ret)
+		return ret;
+
+	bp->step_method = RISCV_HW_BP_STEP_SW;
+	bp->next_addr = next_addr;
+	return 0;
 }
 
 static void dbtr_encode_update(union sbi_dbtr_shmem_entry *shmem,
@@ -574,12 +755,43 @@ out:
 	return hit;
 }
 
+static int handle_triggered_breakpoint(struct perf_event *event,
+				       struct pt_regs *regs)
+{
+	struct arch_hw_breakpoint *bp = counter_arch_bp(event);
+	bool defer_perf;
+	int ret;
+
+	/*
+	 * Report user breakpoints after the temporary step trigger advances
+	 * past the armed instruction.  Otherwise signal delivery can re-enter
+	 * the same execute trigger before the PC has moved.
+	 */
+	defer_perf = !arch_check_bp_in_kernelspace(bp);
+	if (!defer_perf) {
+		perf_bp_event(event, regs);
+		if (!hw_breakpoint_event_active(event))
+			return NOTIFY_STOP;
+	}
+
+	ret = setup_singlestep(event, regs);
+	if (ret < 0) {
+		disable_unhandled_singlestep(event, regs, defer_perf, ret);
+		return NOTIFY_STOP;
+	}
+
+	bp->pending_perf_event = defer_perf;
+	return NOTIFY_STOP;
+}
+
 /*
  * HW Breakpoint/watchpoint handler
  */
 static int hw_breakpoint_handler(struct die_args *args)
 {
-	int i, bp_ret = NOTIFY_DONE;
+	int i, ret = 0, bp_ret = NOTIFY_DONE;
+	struct perf_event *deferred_step_event = NULL;
+	struct arch_hw_breakpoint *deferred_step_bp = NULL;
 	struct arch_hw_breakpoint *bp;
 	struct perf_event *event;
 
@@ -589,6 +801,74 @@ static int hw_breakpoint_handler(struct die_args *args)
 			continue;
 
 		bp = counter_arch_bp(event);
+
+		if (bp->step_method != RISCV_HW_BP_STEP_DISABLED) {
+			bool pending_perf_event;
+
+			/*
+			 * This trap is for the temporary trigger installed by
+			 * setup_singlestep().  Software stepping must match the
+			 * decoded next_addr; icount already reports the post-step
+			 * PC and can restore the original trigger immediately.
+			 */
+			if (bp->step_method == RISCV_HW_BP_STEP_SW &&
+			    args->regs->epc != bp->next_addr) {
+				/*
+				 * A nested breakpoint can fire before this
+				 * event reaches its decoded next_addr, for
+				 * example when perf delivers a signal handler
+				 * with its own breakpoint.  Let the later slot
+				 * handle that trap and keep this temporary step
+				 * armed.  If nobody handles the trap, restore
+				 * below so a real divergence does not lose the
+				 * original breakpoint indefinitely.
+				 */
+				deferred_step_event = event;
+				deferred_step_bp = bp;
+				continue;
+			}
+
+			if (bp->step_method == RISCV_HW_BP_STEP_ICOUNT &&
+			    args->regs->epc == bp->address) {
+				unsigned long tdata1 = icount_step_tdata1();
+
+				/*
+				 * A trap can be observed before the original
+				 * user instruction retires, leaving EPC on the
+				 * armed breakpoint.  Delivering the deferred
+				 * perf event here would account the same
+				 * breakpoint twice, so rearm icount and wait for
+				 * a callback with a post-instruction EPC.
+				 */
+				ret = dbtr_update_event_tdata(event, tdata1, 0, 0, false);
+				if (ret) {
+					disable_unhandled_singlestep(event,
+								     args->regs,
+								     bp->pending_perf_event,
+								     ret);
+					bp_ret = NOTIFY_STOP;
+					goto exit;
+				}
+				bp_ret = NOTIFY_STOP;
+				goto exit;
+			}
+
+			pending_perf_event = bp->pending_perf_event;
+
+			ret = restore_original_breakpoint(event);
+			if (ret) {
+				clear_singlestep_state(bp);
+				perf_event_disable_inatomic(event);
+				bp_ret = NOTIFY_STOP;
+				goto exit;
+			}
+
+			clear_singlestep_state(bp);
+			if (pending_perf_event && hw_breakpoint_event_active(event))
+				perf_bp_event(event, args->regs);
+			bp_ret = NOTIFY_STOP;
+			goto exit;
+		}
 
 		switch (event->attr.bp_type) {
 		/* Breakpoint */
@@ -603,8 +883,7 @@ static int hw_breakpoint_handler(struct die_args *args)
 					       RISCV_DBTR_MC6_HIT_FALSE;
 
 				if (hit) {
-					perf_bp_event(event, args->regs);
-					bp_ret = NOTIFY_STOP;
+					bp_ret = handle_triggered_breakpoint(event, args->regs);
 					goto exit;
 				}
 			}
@@ -640,8 +919,7 @@ static int hw_breakpoint_handler(struct die_args *args)
 				hit |= ranges_overlap(bp_start, bp_len, stval,
 						      sizeof(long));
 				if (hit) {
-					perf_bp_event(event, args->regs);
-					bp_ret = NOTIFY_STOP;
+					bp_ret = handle_triggered_breakpoint(event, args->regs);
 					goto exit;
 				}
 			}
@@ -651,6 +929,15 @@ static int hw_breakpoint_handler(struct die_args *args)
 			pr_warn("Unknown type: %u\n", event->attr.bp_type);
 			goto exit;
 		}
+	}
+
+	if (deferred_step_event) {
+		bp = deferred_step_bp;
+		ret = restore_original_breakpoint(deferred_step_event);
+		if (ret)
+			perf_event_disable_inatomic(deferred_step_event);
+		clear_singlestep_state(bp);
+		bp_ret = NOTIFY_STOP;
 	}
 
 exit:

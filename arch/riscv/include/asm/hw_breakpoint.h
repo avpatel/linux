@@ -15,10 +15,26 @@ struct task_struct;
 /* Maximum number of hardware breakpoints supported */
 #define RISCV_MAX_BP		16
 
+enum riscv_hw_bp_step_method {
+	RISCV_HW_BP_STEP_DISABLED,
+	RISCV_HW_BP_STEP_ICOUNT,
+	RISCV_HW_BP_STEP_SW,
+};
+
 struct arch_hw_breakpoint {
 	unsigned long address;
 	unsigned long len;
 	unsigned int type;
+
+	/*
+	 * Single-step callback state.  While step_method is enabled, the
+	 * hardware slot is temporarily programmed as either an icount trigger
+	 * or an execute trigger at next_addr, and the original trigger config
+	 * is restored when that temporary trigger fires.
+	 */
+	unsigned long next_addr;
+	enum riscv_hw_bp_step_method step_method;
+	bool pending_perf_event;
 	unsigned int match;
 	unsigned int chain;
 	unsigned int select;
