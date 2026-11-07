@@ -15,6 +15,8 @@
 
 #define PTRACE_GETFDPIC_EXEC	0
 #define PTRACE_GETFDPIC_INTERP	1
+#define PTRACE_GETHBPREGS	0x4210
+#define PTRACE_SETHBPREGS	0x4211
 
 /*
  * User-mode register state for core dumps, ptrace, sigcontext
@@ -162,6 +164,13 @@ struct __cfi_status {
 struct user_cfi_state {
 	struct __cfi_status	cfi_status;
 	__u64 shstk_ptr;
+};
+
+struct __riscv_hwdebug_state {
+	__u64 addr;
+	__u64 type;
+	__u64 len;
+	__u64 ctrl;
 };
 
 #endif /* __ASSEMBLER__ */
