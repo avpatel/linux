@@ -526,9 +526,6 @@ static int rpmi_clk_probe(struct platform_device *pdev)
 
 	context->client.dev		= context->dev;
 	context->client.rx_callback	= NULL;
-	context->client.tx_block	= false;
-	context->client.knows_txdone	= true;
-	context->client.tx_tout		= 0;
 
 	context->chan = mbox_request_channel(&context->client, 0);
 	if (IS_ERR(context->chan))

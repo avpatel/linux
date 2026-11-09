@@ -347,9 +347,6 @@ static int rpmi_pm_domain_probe(struct platform_device *pdev)
 	/* Setup mailbox client */
 	mpxy_ctx->client.dev		= dev;
 	mpxy_ctx->client.rx_callback	= NULL;
-	mpxy_ctx->client.tx_block	= false;
-	mpxy_ctx->client.knows_txdone	= true;
-	mpxy_ctx->client.tx_tout	= 0;
 
 	/* Request mailbox channel */
 	mpxy_ctx->chan = mbox_request_channel(&mpxy_ctx->client, 0);

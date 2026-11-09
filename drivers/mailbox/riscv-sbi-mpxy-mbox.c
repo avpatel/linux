@@ -234,6 +234,24 @@ static int mpxy_mbox_send_data(struct mbox_chan *chan, void *data)
 	return -EOPNOTSUPP;
 }
 
+static int mpxy_mbox_send_data_sync(struct mbox_chan *chan, void *data)
+{
+	struct mpxy_mbox_channel *mchan = chan->con_priv;
+	struct rpmi_mbox_message *msg = data;
+
+	if (mchan->attrs.msg_proto_id != SBI_MPXY_MSGPROTO_RPMI_ID)
+		return -EOPNOTSUPP;
+	if (!msg)
+		return -EINVAL;
+
+	/*
+	 * The MPXY helpers take the per-CPU shared-memory guard and complete
+	 * the SBI call synchronously, so msg->error is this call's result.
+	 */
+	mpxy_mbox_send_rpmi_data(mchan, msg);
+	return msg->error;
+}
+
 static bool mpxy_mbox_peek_data(struct mbox_chan *chan)
 {
 	struct mpxy_mbox_channel *mchan = chan->con_priv;
@@ -424,6 +442,7 @@ static void mpxy_mbox_shutdown(struct mbox_chan *chan)
 
 static const struct mbox_chan_ops mpxy_mbox_ops = {
 	.send_data = mpxy_mbox_send_data,
+	.send_data_sync = mpxy_mbox_send_data_sync,
 	.peek_data = mpxy_mbox_peek_data,
 	.startup = mpxy_mbox_startup,
 	.shutdown = mpxy_mbox_shutdown,
@@ -586,8 +605,14 @@ static int mpxy_mbox_probe(struct platform_device *pdev)
 						   mbox->channel_count);
 	if (!mbox->controller.chans)
 		return -ENOMEM;
-	for (i = 0; i < mbox->channel_count; i++)
-		mbox->controller.chans[i].con_priv = &mbox->channels[i];
+	for (i = 0; i < mbox->channel_count; i++) {
+		struct mbox_chan *chan = &mbox->controller.chans[i];
+		struct mpxy_mbox_channel *mchan = &mbox->channels[i];
+
+		chan->con_priv = mchan;
+		if (mchan->attrs.msg_proto_id == SBI_MPXY_MSGPROTO_RPMI_ID)
+			chan->sync_caps = MBOX_CHAN_CAP_SYNC_ATOMIC;
+	}
 
 	/* Setup MSIs for mailbox (if required) */
 	if (mbox->msi_count) {
