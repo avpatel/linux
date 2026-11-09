@@ -19,6 +19,16 @@ struct mbox_chan;
 #define MBOX_TXDONE_BY_POLL	BIT(1) /* controller can read status of last TX */
 #define MBOX_TXDONE_BY_ACK	BIT(2) /* S/W ACK received by Client ticks the TX */
 
+/*
+ * Per-channel direct synchronous transmit capabilities.  A channel with any
+ * of these bits set is a direct channel: mbox_send_message() and mbox_flush()
+ * are rejected on it and the matching direct operation is the only transmit
+ * path.  The bits are set by the controller before registration and are
+ * immutable afterwards.
+ */
+#define MBOX_CHAN_CAP_SYNC_ATOMIC	BIT(0) /* may not sleep */
+#define MBOX_CHAN_CAP_SYNC_SLEEPABLE	BIT(1) /* may sleep */
+
 /**
  * struct mbox_chan_ops - methods to control mailbox channels
  * @send_data:	The API asks the MBOX controller driver, in atomic
@@ -50,6 +60,18 @@ struct mbox_chan;
  *		  Used only if txdone_poll:=true && txdone_irq:=false
  * @peek_data: Atomic check for any received data. Return true if controller
  *		  has some data to push to the client. False otherwise.
+ * @send_data_sync: Optional direct synchronous transmit. It is called from
+ *		  the client's context without chan->lock and must complete the
+ *		  transfer before returning. It must not sleep, must not call the
+ *		  txdone or mailbox transmit APIs recursively, and must not retain
+ *		  @data. It may be called concurrently on the same channel from
+ *		  multiple CPUs; the controller must protect its own resources and
+ *		  may return -EBUSY when a call cannot be served concurrently.
+ *		  Requires MBOX_CHAN_CAP_SYNC_ATOMIC on the channel.
+ * @send_data_sync_sleepable: Optional sleepable variant of @send_data_sync.
+ *		  It has the same direct semantics but may sleep and may therefore
+ *		  only be called from sleepable context. Requires
+ *		  MBOX_CHAN_CAP_SYNC_SLEEPABLE on the channel.
  */
 struct mbox_chan_ops {
 	int (*send_data)(struct mbox_chan *chan, void *data);
@@ -58,6 +80,14 @@ struct mbox_chan_ops {
 	void (*shutdown)(struct mbox_chan *chan);
 	bool (*last_tx_done)(struct mbox_chan *chan);
 	bool (*peek_data)(struct mbox_chan *chan);
+
+	/*
+	 * Optional direct synchronous transmit operations.  Keep these at the
+	 * end so positional initializers for the queued operations remain
+	 * valid.
+	 */
+	int (*send_data_sync)(struct mbox_chan *chan, void *data);
+	int (*send_data_sync_sleepable)(struct mbox_chan *chan, void *data);
 };
 
 /**
@@ -127,6 +157,8 @@ struct mbox_controller {
  * @msg_data:		Hook for data packet
  * @lock:		Serialise access to the channel
  * @con_priv:		Hook for controller driver to attach private data
+ * @sync_caps:		Per-channel direct transmit capabilities, immutable
+ *			after registration.  Zero means a queued channel.
  */
 struct mbox_chan {
 	struct mbox_controller *mbox;
@@ -139,7 +171,13 @@ struct mbox_chan {
 	void *msg_data[MBOX_TX_QUEUE_LEN];
 	spinlock_t lock; /* Serialise access to the channel */
 	void *con_priv;
+	unsigned int sync_caps;	/* MBOX_CHAN_CAP_SYNC_* */
 };
+
+static inline bool mbox_chan_is_sync(const struct mbox_chan *chan)
+{
+	return chan->sync_caps != 0;
+}
 
 int mbox_controller_register(struct mbox_controller *mbox); /* can sleep */
 void mbox_controller_unregister(struct mbox_controller *mbox); /* can sleep */
