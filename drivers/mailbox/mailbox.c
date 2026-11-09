@@ -11,6 +11,7 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/err.h>
+#include <linux/kernel.h>
 #include <linux/mailbox_client.h>
 #include <linux/mailbox_controller.h>
 #include <linux/module.h>
@@ -162,10 +163,14 @@ EXPORT_SYMBOL_GPL(mbox_chan_received_data);
  *
  * The controller that has IRQ for TX ACK calls this atomic API
  * to tick the TX state machine. It works only if txdone_irq
- * is set by the controller.
+ * is set by the controller.  Direct channels do not use the queued
+ * state machine, so calling this on one is a bug and is ignored.
  */
 void mbox_chan_txdone(struct mbox_chan *chan, int r)
 {
+	if (WARN_ON_ONCE(mbox_chan_is_sync(chan)))
+		return;
+
 	if (unlikely(!(chan->txdone_method & MBOX_TXDONE_BY_IRQ))) {
 		dev_err(chan->mbox->dev,
 		       "Controller can't run the TX ticker\n");
@@ -183,10 +188,15 @@ EXPORT_SYMBOL_GPL(mbox_chan_txdone);
  *
  * The client/protocol had received some 'ACK' packet and it notifies
  * the API that the last packet was sent successfully. This only works
- * if the controller can't sense TX-Done.
+ * if the controller can't sense TX-Done.  Direct channels return the
+ * per-call result from mbox_send_message_sync(), so calling this on one
+ * is a bug and is ignored.
  */
 void mbox_client_txdone(struct mbox_chan *chan, int r)
 {
+	if (WARN_ON_ONCE(mbox_chan_is_sync(chan)))
+		return;
+
 	if (unlikely(!(chan->txdone_method & MBOX_TXDONE_BY_ACK))) {
 		dev_err(chan->mbox->dev, "Client can't run the TX ticker\n");
 		return;
@@ -228,13 +238,17 @@ EXPORT_SYMBOL_GPL(mbox_client_peek_data);
  * mbox_send_message() before the channel's TX queue is full. This helps
  * clients avoid the -ENOBUFS error without needing to increase
  * MBOX_TX_QUEUE_LEN.
- * This can be called from atomic context.
+ * This can be called from atomic context.  Direct channels have no TX
+ * queue and always report zero slots.
  *
  * Return: Number of available slots in the channel's TX queue.
  */
 unsigned int mbox_chan_tx_slots_available(struct mbox_chan *chan)
 {
 	unsigned int ret;
+
+	if (mbox_chan_is_sync(chan))
+		return 0;
 
 	guard(spinlock_irqsave)(&chan->lock);
 	ret = MBOX_TX_QUEUE_LEN - chan->msg_count;
@@ -266,6 +280,9 @@ EXPORT_SYMBOL_GPL(mbox_chan_tx_slots_available);
  * access to a channel if multi-threads are to send messages through the
  * same channel, i.e. caller should not call this function until any
  * previous call returns.
+ *  A direct channel (see MBOX_CHAN_CAP_SYNC_*) does not use this queued
+ * path; use mbox_send_message_sync() or
+ * mbox_send_message_sync_sleepable() instead.
  *
  * Return: Non-negative integer for successful submission (non-blocking mode)
  *	or transmission over chan (blocking mode).
@@ -277,6 +294,9 @@ int mbox_send_message(struct mbox_chan *chan, void *mssg)
 
 	if (!chan || !chan->cl || mssg == MBOX_NO_MSG)
 		return -EINVAL;
+
+	if (mbox_chan_is_sync(chan))
+		return -EOPNOTSUPP;
 
 	t = add_to_rbuf(chan, mssg);
 	if (t < 0) {
@@ -309,6 +329,78 @@ int mbox_send_message(struct mbox_chan *chan, void *mssg)
 EXPORT_SYMBOL_GPL(mbox_send_message);
 
 /**
+ * mbox_send_message_sync - directly transmit a message from atomic context
+ * @chan: Mailbox channel assigned to this client.
+ * @mssg: Client specific message typecasted.
+ *
+ * Directly invoke the controller's atomic-safe synchronous transmit
+ * operation.  The operation runs in the caller's context, without
+ * chan->lock and without touching the queued state machine, and returns
+ * the controller's per-call result.  This function does not sleep and may
+ * be called from any context in which the controller's send_data_sync()
+ * operation is safe, including hardirq context.
+ *
+ * The message buffer must remain valid until this function returns; the
+ * controller must not retain it afterwards.  The caller is responsible for
+ * serializing this call against mbox_free_channel() and driver removal.
+ *
+ * Return: 0 on success, -EINVAL for invalid arguments, -EOPNOTSUPP if the
+ * channel does not support atomic-safe direct transmit, or another
+ * negative errno from the controller.
+ */
+int mbox_send_message_sync(struct mbox_chan *chan, void *mssg)
+{
+	if (!chan || !READ_ONCE(chan->cl) || mssg == MBOX_NO_MSG)
+		return -EINVAL;
+
+	lockdep_assert_not_held(&chan->lock);
+
+	if (!(chan->sync_caps & MBOX_CHAN_CAP_SYNC_ATOMIC) ||
+	    !chan->mbox->ops->send_data_sync)
+		return -EOPNOTSUPP;
+
+	return chan->mbox->ops->send_data_sync(chan, mssg);
+}
+EXPORT_SYMBOL_GPL(mbox_send_message_sync);
+
+/**
+ * mbox_send_message_sync_sleepable - directly transmit from sleepable context
+ * @chan: Mailbox channel assigned to this client.
+ * @mssg: Client specific message typecasted.
+ *
+ * Directly invoke a synchronous transmit operation that may sleep.  If the
+ * channel implements send_data_sync_sleepable(), that operation is used;
+ * otherwise the atomic-safe send_data_sync() is used as a fallback.  This
+ * function may sleep and must only be called from sleepable context.
+ *
+ * The message buffer and free/unbind rules are the same as for
+ * mbox_send_message_sync().
+ *
+ * Return: 0 on success, -EINVAL for invalid arguments, -EOPNOTSUPP if the
+ * channel does not support direct transmit, or another negative errno from
+ * the controller.
+ */
+int mbox_send_message_sync_sleepable(struct mbox_chan *chan, void *mssg)
+{
+	if (!chan || !READ_ONCE(chan->cl) || mssg == MBOX_NO_MSG)
+		return -EINVAL;
+
+	lockdep_assert_not_held(&chan->lock);
+	might_sleep();
+
+	if ((chan->sync_caps & MBOX_CHAN_CAP_SYNC_SLEEPABLE) &&
+	    chan->mbox->ops->send_data_sync_sleepable)
+		return chan->mbox->ops->send_data_sync_sleepable(chan, mssg);
+
+	if ((chan->sync_caps & MBOX_CHAN_CAP_SYNC_ATOMIC) &&
+	    chan->mbox->ops->send_data_sync)
+		return chan->mbox->ops->send_data_sync(chan, mssg);
+
+	return -EOPNOTSUPP;
+}
+EXPORT_SYMBOL_GPL(mbox_send_message_sync_sleepable);
+
+/**
  * mbox_flush - flush a mailbox channel
  * @chan: mailbox channel to flush
  * @timeout: time, in milliseconds, to allow the flush operation to succeed
@@ -319,12 +411,17 @@ EXPORT_SYMBOL_GPL(mbox_send_message);
  * call the mbox_flush() function at any time after mbox_send_message() to
  * flush the transmission. After the function returns success, the mailbox
  * transmission is guaranteed to have completed.
+ * Direct channels have no framework transmission to flush, so this function
+ * returns -EOPNOTSUPP for them.
  *
  * Returns: 0 on success or a negative error code on failure.
  */
 int mbox_flush(struct mbox_chan *chan, unsigned long timeout)
 {
 	int ret;
+
+	if (mbox_chan_is_sync(chan))
+		return -EOPNOTSUPP;
 
 	if (!chan->mbox->ops->flush)
 		return -ENOTSUPP;
@@ -343,7 +440,8 @@ static void mbox_clean_and_put_channel(struct mbox_chan *chan)
 	scoped_guard(spinlock_irqsave, &chan->lock) {
 		chan->cl = NULL;
 		chan->active_req = MBOX_NO_MSG;
-		if (chan->txdone_method == MBOX_TXDONE_BY_ACK)
+		if (!mbox_chan_is_sync(chan) &&
+		    chan->txdone_method == MBOX_TXDONE_BY_ACK)
 			chan->txdone_method = MBOX_TXDONE_BY_POLL;
 	}
 
@@ -367,7 +465,8 @@ static int __mbox_bind_client(struct mbox_chan *chan, struct mbox_client *cl)
 		chan->cl = cl;
 		init_completion(&chan->tx_complete);
 
-		if (chan->txdone_method	== MBOX_TXDONE_BY_POLL && cl->knows_txdone)
+		if (chan->txdone_method == MBOX_TXDONE_BY_POLL &&
+		    !mbox_chan_is_sync(chan) && cl->knows_txdone)
 			chan->txdone_method = MBOX_TXDONE_BY_ACK;
 	}
 
@@ -542,6 +641,41 @@ int mbox_controller_register(struct mbox_controller *mbox)
 
 	if (!mbox || !mbox->dev || !mbox->ops || !mbox->chans || !mbox->num_chans)
 		return -EINVAL;
+
+	for (i = 0; i < mbox->num_chans; i++) {
+		struct mbox_chan *chan = &mbox->chans[i];
+
+		if (chan->sync_caps & ~(MBOX_CHAN_CAP_SYNC_ATOMIC |
+					MBOX_CHAN_CAP_SYNC_SLEEPABLE)) {
+			dev_err(mbox->dev,
+				"channel %d has unknown sync capabilities 0x%x\n",
+				i, chan->sync_caps);
+			return -EINVAL;
+		}
+
+		if ((chan->sync_caps & MBOX_CHAN_CAP_SYNC_ATOMIC) &&
+		    !mbox->ops->send_data_sync) {
+			dev_err(mbox->dev,
+				"channel %d advertises atomic sync without send_data_sync\n",
+				i);
+			return -EINVAL;
+		}
+
+		if ((chan->sync_caps & MBOX_CHAN_CAP_SYNC_SLEEPABLE) &&
+		    !mbox->ops->send_data_sync_sleepable) {
+			dev_err(mbox->dev,
+				"channel %d advertises sleepable sync without send_data_sync_sleepable\n",
+				i);
+			return -EINVAL;
+		}
+
+		if (!mbox_chan_is_sync(chan) && !mbox->ops->send_data) {
+			dev_err(mbox->dev,
+				"queued channel %d has no send_data operation\n",
+				i);
+			return -EINVAL;
+		}
+	}
 
 	if (mbox->txdone_irq)
 		txdone = MBOX_TXDONE_BY_IRQ;
