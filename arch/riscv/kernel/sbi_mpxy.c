@@ -6,8 +6,10 @@
  */
 
 #define pr_fmt(fmt) "riscv: " fmt
+#include <linux/cleanup.h>
 #include <linux/cpu.h>
 #include <linux/init.h>
+#include <linux/irqflags.h>
 #include <linux/mm.h>
 #include <linux/percpu.h>
 #include <linux/printk.h>
@@ -50,113 +52,116 @@ EXPORT_SYMBOL_GPL(sbi_mpxy_shmem_size);
 
 int sbi_mpxy_get_channel_count(u32 *channel_count)
 {
-	struct mpxy_local *mpxy = this_cpu_ptr(&mpxy_local);
-	struct sbi_mpxy_channel_ids_data *sdata = mpxy->shmem;
+	struct sbi_mpxy_channel_ids_data *sdata;
+	struct mpxy_local *mpxy;
 	u32 remaining, returned;
 	struct sbiret sret;
 
-	if (!mpxy->shmem_active)
-		return -ENODEV;
 	if (!channel_count)
 		return -EINVAL;
 
-	get_cpu();
+	/*
+	 * The shared memory is per-CPU.  Disable IRQs so that a local IRQ
+	 * cannot re-enter and clobber the buffer while the SBI call uses it.
+	 * This also pins the current CPU for this_cpu_ptr().
+	 */
+	guard(irqsave)();
+	mpxy = this_cpu_ptr(&mpxy_local);
+	if (!mpxy->shmem_active)
+		return -ENODEV;
+	sdata = mpxy->shmem;
 
 	/* Get the remaining and returned fields to calculate total */
 	sret = sbi_ecall(SBI_EXT_MPXY, SBI_EXT_MPXY_GET_CHANNEL_IDS,
 			 0, 0, 0, 0, 0, 0);
 	if (sret.error)
-		goto err_put_cpu;
+		return sbi_err_map_linux_errno(sret.error);
 
 	remaining = le32_to_cpu(sdata->remaining);
 	returned = le32_to_cpu(sdata->returned);
 	*channel_count = remaining + returned;
 
-err_put_cpu:
-	put_cpu();
-	return sbi_err_map_linux_errno(sret.error);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(sbi_mpxy_get_channel_count);
 
 int sbi_mpxy_get_channel_ids(u32 channel_count, u32 *channel_ids)
 {
-	struct mpxy_local *mpxy = this_cpu_ptr(&mpxy_local);
-	struct sbi_mpxy_channel_ids_data *sdata = mpxy->shmem;
 	u32 remaining, returned, count, start_index = 0;
+	struct sbi_mpxy_channel_ids_data *sdata;
+	struct mpxy_local *mpxy;
 	struct sbiret sret;
 
-	if (!mpxy->shmem_active)
-		return -ENODEV;
 	if (!channel_count || !channel_ids)
 		return -EINVAL;
 
-	get_cpu();
+	guard(irqsave)();
+	mpxy = this_cpu_ptr(&mpxy_local);
+	if (!mpxy->shmem_active)
+		return -ENODEV;
+	sdata = mpxy->shmem;
 
 	do {
 		sret = sbi_ecall(SBI_EXT_MPXY, SBI_EXT_MPXY_GET_CHANNEL_IDS,
 				 start_index, 0, 0, 0, 0, 0);
 		if (sret.error)
-			goto err_put_cpu;
+			return sbi_err_map_linux_errno(sret.error);
 
 		remaining = le32_to_cpu(sdata->remaining);
 		returned = le32_to_cpu(sdata->returned);
 
-		count = returned < (channel_count - start_index) ?
-			returned : (channel_count - start_index);
+		count = min(returned, channel_count - start_index);
 		memcpy_from_le32(&channel_ids[start_index], sdata->channel_array, count);
 		start_index += count;
 	} while (remaining && start_index < channel_count);
 
-err_put_cpu:
-	put_cpu();
-	return sbi_err_map_linux_errno(sret.error);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(sbi_mpxy_get_channel_ids);
 
 int sbi_mpxy_read_attrs(u32 channel_id, u32 base_attrid, u32 attr_count,
 			u32 *attrs_buf)
 {
-	struct mpxy_local *mpxy = this_cpu_ptr(&mpxy_local);
+	struct mpxy_local *mpxy;
 	struct sbiret sret;
 
-	if (!mpxy->shmem_active)
-		return -ENODEV;
 	if (!attr_count || !attrs_buf)
 		return -EINVAL;
 
-	get_cpu();
+	guard(irqsave)();
+	mpxy = this_cpu_ptr(&mpxy_local);
+	if (!mpxy->shmem_active)
+		return -ENODEV;
 
 	sret = sbi_ecall(SBI_EXT_MPXY, SBI_EXT_MPXY_READ_ATTRS,
 			 channel_id, base_attrid, attr_count, 0, 0, 0);
 	if (sret.error)
-		goto err_put_cpu;
+		return sbi_err_map_linux_errno(sret.error);
 
 	memcpy_from_le32(attrs_buf, (__le32 *)mpxy->shmem, attr_count);
 
-err_put_cpu:
-	put_cpu();
-	return sbi_err_map_linux_errno(sret.error);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(sbi_mpxy_read_attrs);
 
 int sbi_mpxy_write_attrs(u32 channel_id, u32 base_attrid, u32 attr_count,
 			 u32 *attrs_buf)
 {
-	struct mpxy_local *mpxy = this_cpu_ptr(&mpxy_local);
+	struct mpxy_local *mpxy;
 	struct sbiret sret;
 
-	if (!mpxy->shmem_active)
-		return -ENODEV;
 	if (!attr_count || !attrs_buf)
 		return -EINVAL;
 
-	get_cpu();
+	guard(irqsave)();
+	mpxy = this_cpu_ptr(&mpxy_local);
+	if (!mpxy->shmem_active)
+		return -ENODEV;
 
 	memcpy_to_le32((__le32 *)mpxy->shmem, attrs_buf, attr_count);
 	sret = sbi_ecall(SBI_EXT_MPXY, SBI_EXT_MPXY_WRITE_ATTRS,
 			 channel_id, base_attrid, attr_count, 0, 0, 0);
 
-	put_cpu();
 	return sbi_err_map_linux_errno(sret.error);
 }
 EXPORT_SYMBOL_GPL(sbi_mpxy_write_attrs);
@@ -166,16 +171,17 @@ int sbi_mpxy_send_message_with_resp(u32 channel_id, u32 msg_id,
 				    void *rx, unsigned long max_rx_len,
 				    unsigned long *rx_len)
 {
-	struct mpxy_local *mpxy = this_cpu_ptr(&mpxy_local);
+	struct mpxy_local *mpxy;
 	unsigned long rx_bytes;
 	struct sbiret sret;
 
-	if (!mpxy->shmem_active)
-		return -ENODEV;
 	if (!tx && tx_len)
 		return -EINVAL;
 
-	get_cpu();
+	guard(irqsave)();
+	mpxy = this_cpu_ptr(&mpxy_local);
+	if (!mpxy->shmem_active)
+		return -ENODEV;
 
 	/* Message protocols allowed to have no data in messages */
 	if (tx_len)
@@ -185,17 +191,14 @@ int sbi_mpxy_send_message_with_resp(u32 channel_id, u32 msg_id,
 			 channel_id, msg_id, tx_len, 0, 0, 0);
 	if (rx && !sret.error) {
 		rx_bytes = sret.value;
-		if (rx_bytes > max_rx_len) {
-			put_cpu();
+		if (rx_bytes > max_rx_len)
 			return -ENOSPC;
-		}
 
 		memcpy(rx, mpxy->shmem, rx_bytes);
 		if (rx_len)
 			*rx_len = rx_bytes;
 	}
 
-	put_cpu();
 	return sbi_err_map_linux_errno(sret.error);
 }
 EXPORT_SYMBOL_GPL(sbi_mpxy_send_message_with_resp);
@@ -203,15 +206,16 @@ EXPORT_SYMBOL_GPL(sbi_mpxy_send_message_with_resp);
 int sbi_mpxy_send_message_without_resp(u32 channel_id, u32 msg_id,
 				       void *tx, unsigned long tx_len)
 {
-	struct mpxy_local *mpxy = this_cpu_ptr(&mpxy_local);
+	struct mpxy_local *mpxy;
 	struct sbiret sret;
 
-	if (!mpxy->shmem_active)
-		return -ENODEV;
 	if (!tx && tx_len)
 		return -EINVAL;
 
-	get_cpu();
+	guard(irqsave)();
+	mpxy = this_cpu_ptr(&mpxy_local);
+	if (!mpxy->shmem_active)
+		return -ENODEV;
 
 	/* Message protocols allowed to have no data in messages */
 	if (tx_len)
@@ -220,7 +224,6 @@ int sbi_mpxy_send_message_without_resp(u32 channel_id, u32 msg_id,
 	sret = sbi_ecall(SBI_EXT_MPXY, SBI_EXT_MPXY_SEND_MSG_WITHOUT_RESP,
 			 channel_id, msg_id, tx_len, 0, 0, 0);
 
-	put_cpu();
 	return sbi_err_map_linux_errno(sret.error);
 }
 EXPORT_SYMBOL_GPL(sbi_mpxy_send_message_without_resp);
@@ -229,32 +232,29 @@ int sbi_mpxy_get_notifications(u32 channel_id,
 			       struct sbi_mpxy_notification_data *notif_data,
 			       unsigned long *events_data_len)
 {
-	struct mpxy_local *mpxy = this_cpu_ptr(&mpxy_local);
+	struct mpxy_local *mpxy;
 	struct sbiret sret;
 
-	if (!mpxy->shmem_active)
-		return -ENODEV;
 	if (!notif_data || !events_data_len)
 		return -EINVAL;
 
-	get_cpu();
+	guard(irqsave)();
+	mpxy = this_cpu_ptr(&mpxy_local);
+	if (!mpxy->shmem_active)
+		return -ENODEV;
 
 	sret = sbi_ecall(SBI_EXT_MPXY, SBI_EXT_MPXY_GET_NOTIFICATION_EVENTS,
 			 channel_id, 0, 0, 0, 0, 0);
 	if (sret.error)
-		goto err_put_cpu;
+		return sbi_err_map_linux_errno(sret.error);
 	if (sret.value < 0 || mpxy_shmem_size < sizeof(*notif_data) ||
-	    sret.value > mpxy_shmem_size - sizeof(*notif_data)) {
-		put_cpu();
+	    sret.value > mpxy_shmem_size - sizeof(*notif_data))
 		return -EOVERFLOW;
-	}
 
 	memcpy(notif_data, mpxy->shmem, sret.value + sizeof(*notif_data));
 	*events_data_len = sret.value;
 
-err_put_cpu:
-	put_cpu();
-	return sbi_err_map_linux_errno(sret.error);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(sbi_mpxy_get_notifications);
 
