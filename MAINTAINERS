@@ -24233,9 +24233,11 @@ F:	arch/riscv/boot/dts/sifive/
 RISC-V PMU DRIVERS
 M:	Atish Patra <atish.patra@linux.dev>
 R:	Anup Patel <anup@brainfault.org>
+R:	Vikram Singh <vikram.singh3@oss.qualcomm.com>
 L:	linux-riscv@lists.infradead.org
 S:	Supported
 F:	Documentation/arch/riscv/pmu-sse.rst
+F:	drivers/perf/riscv_ctr.c
 F:	drivers/perf/riscv_pmu.c
 F:	drivers/perf/riscv_pmu_legacy.c
 F:	drivers/perf/riscv_pmu_sbi.c
