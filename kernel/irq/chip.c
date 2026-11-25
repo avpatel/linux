@@ -1536,6 +1536,7 @@ int irq_chip_compose_msi_msg(struct irq_data *data, struct msi_msg *msg)
 	pos->chip->irq_compose_msi_msg(pos, msg);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(irq_chip_compose_msi_msg);
 
 static struct device *irq_get_pm_device(struct irq_data *data)
 {
