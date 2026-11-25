@@ -304,7 +304,7 @@ static int riscv_pmu_event_init(struct perf_event *event)
 	uint64_t cmask;
 
 	/* driver does not support branch stack sampling */
-	if (has_branch_stack(event))
+	if (has_branch_stack(event) && !riscv_pmu_ctr_supported(rvpmu))
 		return -EOPNOTSUPP;
 
 	hwc->flags = 0;
